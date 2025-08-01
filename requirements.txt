@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+streamlit
+pandas
+numpy
+tensorflow
+scikit-learn
+alpha-vantage
+ta-lib
+nltk
+finnhub-python
+python-dotenv
+matplotlib
+seaborn
