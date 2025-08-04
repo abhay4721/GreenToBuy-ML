@@ -1,53 +1,45 @@
+import talib
 import streamlit as st
-import pandas as pd
 import requests
 import plotly.graph_objects as go
-import seaborn as sns
-import matplotlib.pyplot as plt
+import pandas as pd
+from datetime import datetime
 
-st.set_page_config(page_title="Stock Price Predictor", layout="wide")
-st.title("AI-Powered Stock Price Predictor")
-st.markdown("Analyze stock prices with advanced machine learning, candlestick patterns, and news sentiment.")
+st.set_page_config(page_title="GreenToBuy", layout="wide")
 
-# Sidebar for input
-st.sidebar.header("Stock Analysis")
-symbol = st.sidebar.text_input("Enter Stock Symbol (e.g., AAPL)", value="AAPL").upper()
-time_period = st.sidebar.selectbox("Select Time Period", ["30 Days"])
-analyze_button = st.sidebar.button("Analyze Stock")
+st.title("GreenToBuy")
+st.markdown("Enter a stock or forex symbol (e.g., AAPL, XAUUSD) to get price predictions and analysis.")
 
-# Initialize session state
-if 'data' not in st.session_state:
-    st.session_state.data = None
-    st.session_state.patterns = []
-    st.session_state.prediction = None
-    st.session_state.sentiment = None
-    st.session_state.error = None
+symbol = st.sidebar.text_input("Enter Symbol (e.g., AAPL, XAUUSD)", value="XAUUSD").upper()
+timeframe = st.sidebar.selectbox("Select Timeframe", ["5 Minutes", "15 Minutes", "1 Hour", "Daily"], index=0)
+model_type = st.sidebar.selectbox("Select Model", ["LSTM", "XGBoost"], index=0)
 
-if analyze_button:
-    with st.spinner("Fetching and analyzing data..."):
-        try:
-            response = requests.get(f"http://localhost:8000/api/stock/{symbol}")
-            response.raise_for_status()
-            result = response.json()
-            
-            st.session_state.data = result['data']
-            st.session_state.patterns = result['patterns']
-            st.session_state.prediction = result['prediction']
-            st.session_state.sentiment = result['sentiment']
-            st.session_state.error = None
-        except Exception as e:
-            st.session_state.error = str(e)
-            st.session_state.data = None
+timeframe_map = {
+    "5 Minutes": "5min",
+    "15 Minutes": "15min",
+    "1 Hour": "60min",
+    "Daily": "daily"
+}
+selected_interval = timeframe_map[timeframe]
 
-# Display results
-if st.session_state.error:
-    st.error(f"Error: {st.session_state.error}")
-elif st.session_state.data:
-    col1, col2 = st.columns([2, 1])
+try:
+    response = requests.get(f"http://localhost:8000/api/stock/{symbol}?model_type={model_type.lower()}")
+    response.raise_for_status()
+    data = response.json()
+except Exception as e:
+    st.error(f"Error fetching data: {e}")
+    st.stop()
+
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.subheader(f"{symbol} Candlestick Chart ({timeframe})")
+    chart_data = data.get("chart_data", {}).get(selected_interval, [])
     
-    with col1:
-        st.subheader("Candlestick Chart")
-        df = pd.DataFrame(st.session_state.data)
+    if not chart_data or isinstance(chart_data, dict) and "error" in chart_data:
+        st.warning(f"No data available for {symbol} ({timeframe})")
+    else:
+        df = pd.DataFrame(chart_data)
         df['x'] = pd.to_datetime(df['x'])
         
         fig = go.Figure(data=[
@@ -61,52 +53,46 @@ elif st.session_state.data:
             )
         ])
         fig.update_layout(
-            title=f"{symbol} Stock Price",
+            title=f"{symbol} ({timeframe})",
             xaxis_title="Date",
-            yaxis_title="Price (USD)",
-            xaxis_rangeslider_visible=False
+            yaxis_title="Price",
+            xaxis_rangeslider_visible=False,
+            template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        st.subheader("Analysis Summary")
-        st.markdown("**Predicted Next Day Close**")
-        st.write(f"${st.session_state.prediction:.2f}")
-        
-        st.markdown("**News Sentiment**")
-        sentiment_label = "Positive" if st.session_state.sentiment > 0 else "Negative" if st.session_state.sentiment < 0 else "Neutral"
-        st.write(f"{sentiment_label} ({st.session_state.sentiment:.2f})")
-        
-        st.markdown("**Candlestick Patterns**")
-        if st.session_state.patterns:
-            pattern_df = pd.DataFrame(st.session_state.patterns)
-            st.dataframe(pattern_df[['date', 'pattern', 'signal']], use_container_width=True)
-        else:
-            st.write("No patterns detected.")
-    
-    st.subheader("Technical Indicators")
-    # Placeholder for additional visualizations (e.g., RSI, MACD)
-    st.write("Technical indicators visualization coming soon.")
 
-    # Download results
-    if st.session_state.data:
-        csv_data = [
-            "Date,Open,High,Low,Close",
-            *[f"{d['x']},{d['o']},{d['h']},{d['l']},{d['c']}" for d in st.session_state.data],
-            "",
-            "Date,Pattern,Signal",
-            *[f"{p['date']},{p['pattern']},{p['signal']}" for p in st.session_state.patterns],
-            "",
-            "Prediction,Next Day Close",
-            f",${st.session_state.prediction:.2f}",
-            "",
-            "Sentiment,Score",
-            f",{st.session_state.sentiment:.2f}"
-        ]
-        csv = "\n".join(csv_data)
-        st.download_button(
-            label="Download Results as CSV",
-            data=csv,
-            file_name=f"{symbol}_analysis.csv",
-            mime="text/csv"
-        )
+with col2:
+    st.subheader("Predictions")
+    predictions = data.get("predictions", {})
+    
+    for interval, prediction in predictions.items():
+        timeframe_display = {
+            "5min": "5 Minutes",
+            "15min": "15 Minutes",
+            "60min": "1 Hour",
+            "daily": "Next Day"
+        }.get(interval, interval)
+        
+        if isinstance(prediction, dict) and "error" in prediction:
+            st.write(f"{timeframe_display}: {prediction['error']}")
+        else:
+            st.write(f"{timeframe_display}: ${prediction:.2f}")
+    
+    st.subheader("Sentiment Analysis")
+    sentiment = data.get("sentiment", 0.0)
+    sentiment_label = "Neutral" if sentiment == 0 else "Bullish" if sentiment > 0 else "Bearish"
+    st.write(f"Sentiment: {sentiment_label} ({sentiment:.2f})")
+    
+    st.subheader("Candlestick Patterns")
+    patterns = data.get("patterns", {}).get(selected_interval, [])
+    if not patterns:
+        st.write("No patterns detected")
+    else:
+        for pattern in patterns[-5:]:  
+            st.write(f"{pattern['date']}: {pattern['pattern']} ({pattern['signal']})")
+    
+    st.write(f"Model Used: {data.get('model_type', 'LSTM').upper()}")
+
+# Disclaimer
+st.markdown("---")
+st.markdown("**Disclaimer**: This is :) ")

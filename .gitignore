@@ -1,2 +1,3 @@
-/venu/
 /.env
+/stock_data.db
+/venv/
