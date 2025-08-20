@@ -1,3 +1,4 @@
+# server.py
 import os
 import logging
 from dotenv import load_dotenv
@@ -35,17 +36,19 @@ app.add_middleware(
 
 FINNHUB_KEY = os.getenv("FINNHUB_API_KEY")
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_API_KEY")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
+ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY")
+
 finnhub_client = finnhub.Client(api_key=FINNHUB_KEY)
 sia = SentimentIntensityAnalyzer()
 
 FOREX_TICKER_MAP = {
-    "XAUUSD": "GC=F",  
+    "XAUUSD": "GC=F",
     "EURUSD": "EURUSD=X",
     "GBPUSD": "GBPUSD=X",
 }
 
 def is_forex_symbol(symbol):
-    """Check if the symbol is a forex pair (e.g., XAUUSD, EURUSD)."""
     forex_pattern = r'^[A-Z]{3}[A-Z]{3}$'
     return bool(re.match(forex_pattern, symbol))
 
@@ -54,8 +57,8 @@ def get_stock_data(symbol, interval='daily'):
         conn = sqlite3.connect('stock_data.db')
         table_name = f"{symbol}_{interval}"
         try:
-            cached_data = pd.read_sql(f"SELECT * FROM {table_name}", conn, index_col='date')
-            if not cached_data.empty and (datetime.now() - pd.to_datetime(cached_data.index[-1])).days < 1:
+            cached_data = pd.read_sql(f"SELECT * FROM {table_name}", conn, index_col='date', parse_dates=['date'])
+            if not cached_data.empty and (datetime.now() - cached_data.index[-1]).days < 1:
                 logger.debug(f"Using cached data for {symbol} ({interval})")
                 conn.close()
                 return cached_data
@@ -81,7 +84,11 @@ def get_stock_data(symbol, interval='daily'):
             data = get_twelve_data(symbol, interval)
         
         if data.empty:
-            raise Exception("No data returned from yfinance or Twelve Data")
+            logger.debug(f"Twelve Data returned no data, trying Alpha Vantage")
+            data = get_alpha_vantage_data(symbol, interval)
+        
+        if data.empty:
+            raise Exception("No data returned from sources")
         
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = [col[0].lower().replace(' ', '_') for col in data.columns]
@@ -93,13 +100,14 @@ def get_stock_data(symbol, interval='daily'):
         required_columns = ['open', 'high', 'low', 'close', 'volume']
         missing_columns = [col for col in required_columns if col not in data.columns]
         if missing_columns:
-            logger.debug(f"Missing columns {missing_columns}, trying Twelve Data")
-            data = get_twelve_data(symbol, interval)
+            logger.debug(f"Missing columns {missing_columns}, trying alternative sources")
+            data = get_twelve_data(symbol, interval) or get_alpha_vantage_data(symbol, interval)
             if data.empty:
                 raise Exception(f"Missing required columns: {missing_columns}")
             data.columns = [str(col).lower().replace(' ', '_') for col in data.columns]
         
         data = data[required_columns]
+        data.index = pd.to_datetime(data.index)
         data.index.name = 'date'
         data = data.sort_index()
         data.to_sql(table_name, conn, if_exists='replace')
@@ -110,7 +118,6 @@ def get_stock_data(symbol, interval='daily'):
         raise Exception(f"Failed to fetch data: {str(e)}")
 
 def get_twelve_data(symbol, interval):
-    """Fetch data from Twelve Data as a fallback for forex pairs."""
     try:
         interval_map = {
             '5min': '5min',
@@ -135,36 +142,100 @@ def get_twelve_data(symbol, interval):
         logger.error(f"Twelve Data error for {symbol} ({interval}): {str(e)}")
         return pd.DataFrame()
 
+def get_alpha_vantage_data(symbol, interval):
+    try:
+        function_map = {
+            '5min': 'TIME_SERIES_INTRADAY',
+            '15min': 'TIME_SERIES_INTRADAY',
+            '60min': 'TIME_SERIES_INTRADAY',
+            'daily': 'TIME_SERIES_DAILY'
+        }
+        av_function = function_map.get(interval, 'TIME_SERIES_DAILY')
+        av_interval = interval if 'min' in interval else None
+        
+        params = {
+            'function': av_function,
+            'symbol': symbol,
+            'apikey': ALPHA_VANTAGE_KEY
+        }
+        if av_interval:
+            params['interval'] = interval
+        
+        url = "https://www.alphavantage.co/query"
+        response = requests.get(url, params=params).json()
+        
+        time_series_key = next((k for k in response if 'Time Series' in k), None)
+        if not time_series_key:
+            return pd.DataFrame()
+        
+        data = pd.DataFrame.from_dict(response[time_series_key], orient='index')
+        data = data[['1. open', '2. high', '3. low', '4. close', '5. volume']].astype(float)
+        data.columns = ['open', 'high', 'low', 'close', 'volume']
+        data.index = pd.to_datetime(data.index)
+        return data.sort_index()
+    except Exception as e:
+        logger.error(f"Alpha Vantage error for {symbol} ({interval}): {str(e)}")
+        return pd.DataFrame()
+
 def get_news_sentiment(symbol):
     try:
+        scores = []
+        # Try Finnhub first
         to_date = datetime.now().strftime('%Y-%m-%d')
         from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
         news = finnhub_client.company_news(symbol, _from=from_date, to=to_date)
-        logger.debug(f"Finnhub news for {symbol}: {len(news)} articles")
-        scores = [sia.polarity_scores(article['summary'])['compound'] for article in news if 'summary' in article]
+        for article in news:
+            text = (article.get('headline', '') + ' ' + article.get('summary', '')).strip()
+            if text and len(text) > 20:  # Ensure meaningful text
+                score = sia.polarity_scores(text)['compound']
+                scores.append(score)
+        
+        # If insufficient Finnhub data, use NewsAPI
+        if len(scores) < 5:
+            url = f"https://newsapi.org/v2/everything?q={symbol}&from={from_date}&sortBy=publishedAt&apiKey={NEWSAPI_KEY}"
+            response = requests.get(url).json()
+            articles = response.get('articles', [])
+            for article in articles:
+                text = (article.get('title', '') + ' ' + article.get('description', '')).strip()
+                if text and len(text) > 20:
+                    score = sia.polarity_scores(text)['compound']
+                    scores.append(score)
+        
         sentiment = np.mean(scores) if scores else 0.0
-        logger.debug(f"Sentiment for {symbol}: {sentiment}")
+        logger.debug(f"Sentiment for {symbol}: {sentiment} (from {len(scores)} articles)")
         return sentiment
     except Exception as e:
-        logger.error(f"Finnhub error for {symbol}: {str(e)}")
+        logger.error(f"News sentiment error for {symbol}: {str(e)}")
         return 0.0
 
 def detect_patterns(data):
     patterns = {}
-    for pattern in ['CDLDOJI', 'CDLENGULFING', 'CDLHAMMER', 'CDLMORNINGSTAR']:
+    # Expanded list of candlestick patterns
+    candlestick_patterns = [
+        'CDLDOJI', 'CDLENGULFING', 'CDLHAMMER', 'CDLMORNINGSTAR',
+        'CDLEVENINGSTAR', 'CDLHARAMI', 'CDLDRAGONFLYDOJI', 'CDLGRAVESTONEDOJI',
+        'CDLPIERCING', 'CDLDARKCLOUDCOVER', 'CDLDOJISTAR', 'CDLMARUBOZU'
+    ]
+    for pattern in candlestick_patterns:
         try:
             values = getattr(talib, pattern)(data['open'], data['high'], data['low'], data['close'])
             patterns[pattern] = values
         except AttributeError as e:
-            logger.error(f"TA-Lib error: {str(e)}")
+            logger.error(f"TA-Lib error for {pattern}: {str(e)}")
             continue
     detected = []
-    for date, row in data.iterrows():
+    for i, (date, row) in enumerate(data.iterrows()):
         for pattern, values in patterns.items():
-            if values.loc[date] != 0:
-                signal = 'Bullish' if pattern in ['CDLHAMMER', 'CDLMORNINGSTAR'] or (pattern == 'CDLENGULFING' and values.loc[date] > 0) else 'Bearish' if pattern == 'CDLENGULFING' else 'Neutral'
+            if values.iloc[i] != 0:
+                signal = (
+                    'Bullish' if pattern in ['CDLHAMMER', 'CDLMORNINGSTAR', 'CDLPIERCING', 'CDLDRAGONFLYDOJI'] or
+                    (pattern in ['CDLENGULFING', 'CDLHARAMI', 'CDLDOJISTAR', 'CDLMARUBOZU'] and values.iloc[i] > 0)
+                    else 'Bearish' if pattern in ['CDLEVENINGSTAR', 'CDLDARKCLOUDCOVER', 'CDLGRAVESTONEDOJI'] or
+                    (pattern in ['CDLENGULFING', 'CDLHARAMI', 'CDLDOJISTAR', 'CDLMARUBOZU'] and values.iloc[i] < 0)
+                    else 'Neutral'
+                )
                 detected.append({
-                    'date': date,
+                    'date': date.isoformat() if hasattr(date, 'isoformat') else str(date),
                     'pattern': pattern.replace('CDL', '').lower().capitalize(),
                     'signal': signal
                 })
@@ -179,8 +250,10 @@ def prepare_lstm_data(data, sentiment, interval='daily'):
         data['bb_upper'], data['bb_middle'], data['bb_lower'] = talib.BBANDS(data['close'], timeperiod=20)
         data['doji'] = talib.CDLDOJI(data['open'], data['high'], data['low'], data['close']) / 100
         data['engulfing'] = talib.CDLENGULFING(data['open'], data['high'], data['low'], data['close']) / 100
+        data['hammer'] = talib.CDLHAMMER(data['open'], data['high'], data['low'], data['close']) / 100
+        data['morningstar'] = talib.CDLMORNINGSTAR(data['open'], data['high'], data['low'], data['close']) / 100
         data['sentiment'] = sentiment
-        features = data[['close', 'sma_5', 'rsi', 'macd', 'atr', 'bb_upper', 'bb_lower', 'doji', 'engulfing', 'sentiment']].dropna()
+        features = data[['close', 'sma_5', 'rsi', 'macd', 'atr', 'bb_upper', 'bb_lower', 'doji', 'engulfing', 'hammer', 'morningstar', 'sentiment']].dropna()
         
         scaler = MinMaxScaler()
         scaled_data = scaler.fit_transform(features)
@@ -235,10 +308,16 @@ async def get_stock_analysis(symbol: str, model_type: str = "lstm"):
         sentiment = get_news_sentiment(symbol)
         logger.debug(f"Sentiment: {sentiment}")
         
+        latest_price = None
         for interval in intervals:
             try:
                 data = get_stock_data(symbol, interval)
                 logger.debug(f"Fetched data for {interval}: {data.shape}")
+                if not data.empty and latest_price is None:
+                    latest_price = {
+                        'price': data['close'][-1],
+                        'timestamp': data.index[-1].isoformat() if hasattr(data.index[-1], 'isoformat') else str(data.index[-1])
+                    }
                 patterns = detect_patterns(data)
                 logger.debug(f"Patterns for {interval}: {len(patterns)} detected")
                 patterns_dict[interval] = patterns
@@ -267,7 +346,7 @@ async def get_stock_analysis(symbol: str, model_type: str = "lstm"):
                 predictions[interval] = round(prediction, 2)
                 
                 chart_data[interval] = [
-                    {'x': date.isoformat(), 'o': row['open'], 'h': row['high'], 'l': row['low'], 'c': row['close']}
+                    {'x': date.isoformat() if hasattr(date, 'isoformat') else str(date), 'o': row['open'], 'h': row['high'], 'l': row['low'], 'c': row['close']}
                     for date, row in data.tail(30 if interval == 'daily' else 100).iterrows()
                 ]
             except Exception as e:
@@ -282,7 +361,8 @@ async def get_stock_analysis(symbol: str, model_type: str = "lstm"):
             "predictions": predictions,
             "sentiment": round(sentiment, 2),
             "is_forex": is_forex_symbol(symbol),
-            "model_type": model_type
+            "model_type": model_type,
+            "latest_price": latest_price or {}
         }
     except Exception as e:
         logger.error(f"Error processing {symbol}: {str(e)}", exc_info=True)
