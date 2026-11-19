@@ -15,6 +15,7 @@ Forecasts are estimates from historical data. They do not account for future new
 - Six forecast horizons (1, 3, 5, 10, 20, and 30 bars), return-residual probability summaries, and 80/90/95% empirical intervals with separate holdout coverage reporting.
 - Causal return, drawdown, Hurst, trend-regime, EWMA, Parkinson, and Garman-Klass diagnostics with explicit assumptions.
 - A local reproducibility ledger recording forecast settings, feature set, software versions, random seed, metrics, and recent run history.
+- Pointwise predictions from the final chronological holdout, plotted with actual prices and the unchanged-close baseline.
 - A Streamlit dashboard with candlesticks, forecast range, latest indicators, and validation results.
 - Curated Indian listings and NIFTY 50, NIFTY Bank, and SENSEX indices through Yahoo Finance symbols.
 - India-profile trend and volume feature tuning; forex auto mode evaluates a validation-weighted model blend with a baseline guard.

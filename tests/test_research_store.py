@@ -22,6 +22,7 @@ class ResearchStoreTests(unittest.TestCase):
                 "naive_metrics": {"mae": 1.5},
                 "model_comparison": {"Ridge": {"mae": 1.2}},
                 "uncertainty": {"method": "selection residuals"},
+                "validation_predictions": [{"timestamp": "2026-01-01", "actual": 101.0, "predicted": 100.5, "unchanged_close": 100.0}],
                 "ensemble_weights": {},
                 "diagnostics": {"regime": "sideways"},
                 "risk": {"ewma_volatility_pct_per_bar": 0.5},
@@ -35,6 +36,7 @@ class ResearchStoreTests(unittest.TestCase):
             self.assertEqual(runs[0]["experiment_id"], run_id)
             self.assertEqual(runs[0]["config"]["random_seed"], 17)
             self.assertEqual(runs[0]["config"]["features"], ["close", "rsi"])
+            self.assertEqual(runs[0]["metrics"]["holdout_predictions"][0]["actual"], 101.0)
             self.assertEqual(recent_experiments("AAPL", db_path=database), [])
 
 

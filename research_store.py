@@ -78,7 +78,7 @@ def record_experiment(
                 forecast["return_forecast_pct"],
                 forecast["training_seconds"],
                 _json(config),
-                _json({"selected": forecast["metrics"], "naive": forecast["naive_metrics"], "comparison": forecast["model_comparison"], "uncertainty": forecast["uncertainty"]}),
+                _json({"selected": forecast["metrics"], "naive": forecast["naive_metrics"], "comparison": forecast["model_comparison"], "uncertainty": forecast["uncertainty"], "holdout_predictions": forecast["validation_predictions"]}),
                 _json({"diagnostics": forecast["diagnostics"], "risk": forecast["risk"]}),
             ),
         )

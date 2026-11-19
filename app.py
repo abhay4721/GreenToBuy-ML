@@ -227,6 +227,16 @@ if analyze:
         st.write(f"{horizon}-bar square-root-time volatility estimate: {result['risk']['sqrt_time_horizon_volatility_pct']:.3f}%")
         st.caption(result["risk"]["range_assumption"])
 
+    st.subheader("Untouched holdout: actual vs predicted")
+    holdout = pd.DataFrame(forecast["validation_predictions"])
+    holdout["timestamp"] = pd.to_datetime(holdout["timestamp"], utc=True)
+    holdout_fig = go.Figure()
+    holdout_fig.add_trace(go.Scatter(x=holdout["timestamp"], y=holdout["actual"], mode="lines+markers", name="Actual", line={"color": "#e8edf2"}))
+    holdout_fig.add_trace(go.Scatter(x=holdout["timestamp"], y=holdout["predicted"], mode="lines+markers", name="Selected model", line={"color": "#42d392"}))
+    holdout_fig.add_trace(go.Scatter(x=holdout["timestamp"], y=holdout["unchanged_close"], mode="lines", name="Unchanged-close baseline", line={"color": "#f2b84b", "dash": "dot"}))
+    holdout_fig.update_layout(template="plotly_dark", height=360, margin={"l": 10, "r": 10, "t": 10, "b": 10}, legend={"orientation": "h", "y": 1.02})
+    st.plotly_chart(holdout_fig, use_container_width=True)
+
     with st.expander("Recent saved forecast runs"):
         try:
             history_response = requests.get(

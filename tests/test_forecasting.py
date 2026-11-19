@@ -86,6 +86,9 @@ class DataPipelineTests(unittest.TestCase):
                     {"Ridge", "Random Forest", "Extra Trees", "Hist Gradient Boosting", "SVR", "Weighted Ensemble", "Naïve: unchanged close"},
                 )
                 self.assertEqual(result.validation_points, 40)
+                self.assertEqual(len(result.validation_predictions), result.validation_points)
+                self.assertEqual(result.validation_predictions[-1]["timestamp"], data.index[-1].isoformat())
+                self.assertIn("actual", result.validation_predictions[0])
                 self.assertIn("regime", result.diagnostics)
                 self.assertIn("ewma_volatility_pct_per_bar", result.risk)
                 self.assertGreaterEqual(result.probability_positive, 0)

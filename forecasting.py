@@ -39,6 +39,7 @@ class ForecastResult:
     training_seconds: float
     return_forecast_pct: float
     probability_positive: float
+    validation_predictions: list[dict[str, Any]]
     validation_points: int
     validation_end: str
 
@@ -330,6 +331,16 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
         coverage = float(np.mean((holdout_errors >= lower_error) & (holdout_errors <= upper_error)) * 100)
         intervals[label] = {"lower": float(lower), "upper": float(upper), "holdout_coverage_pct": coverage}
     probability_positive = float(np.mean(predicted_return + calibration_errors > 0) * 100)
+    target_positions = data.index.get_indexer(dataset.index[holdout_start:]) + horizon
+    validation_predictions = [
+        {
+            "timestamp": data.index[position].isoformat() if hasattr(data.index[position], "isoformat") else str(data.index[position]),
+            "actual": float(holdout_y[offset]),
+            "predicted": float(selected_holdout[offset]),
+            "unchanged_close": float(holdout_previous[offset]),
+        }
+        for offset, position in enumerate(target_positions)
+    ]
     return ForecastResult(
         forecast=value,
         reference_price=reference_price,
@@ -351,6 +362,7 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
         training_seconds=float(metrics["training_seconds"]),
         return_forecast_pct=float(predicted_return * 100),
         probability_positive=probability_positive,
+        validation_predictions=validation_predictions,
         validation_points=len(holdout_y),
         validation_end=str(data.index[-1].isoformat() if hasattr(data.index[-1], "isoformat") else data.index[-1]),
     )
