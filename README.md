@@ -1,151 +1,79 @@
-# GreenToBuy-ML 🚀
+# GreenToBuy
 
-**GreenToBuy-ML** is a machine learning-powered stock analysis and prediction platform that provides real-time insights through an interactive web interface.  
-It works smoothly on Windows and Linux (Arch, Ubuntu, Debian).
+GreenToBuy is a small market analysis application built with FastAPI and Streamlit. It loads Yahoo Finance OHLCV history, calculates technical features, compares two regression models with chronological validation, and displays a direct forecast for a selected horizon.
 
-## ✨ Features
+Forecasts are estimates from historical data. They do not account for future news, corporate actions beyond the source data, or changing market conditions, and are not investment advice.
 
-- 📈 Real-time stock price fetching
-- 📊 Technical indicators using TA-Lib
-- 💬 Sentiment analysis using NLTK VADER
-- 🤖 Multiple ML models for prediction
-- 🖥️ Interactive Streamlit dashboard
-- ⚡ High-performance FastAPI backend
+## Features
 
-## 🛠 Technology Stack
+- Daily and intraday OHLCV history with a local SQLite cache.
+- Data validation for missing prices, duplicate timestamps, and invalid symbols.
+- Moving averages, EMA, RSI, MACD, Bollinger bands, ATR, ADX, OBV, returns, volatility, momentum, and lag features.
+- Ridge regression and Random Forest comparison, with automatic selection by walk-forward MAE.
+- Purged chronological validation, error metrics, directional accuracy, and an unchanged-close benchmark.
+- A Streamlit dashboard with candlesticks, forecast range, latest indicators, and validation results.
 
-- Python – Core programming language
-- Streamlit – Web application framework
-- Scikit-learn – Machine learning algorithms
-- Yahoo Finance API (yfinance) – Stock data
-- Matplotlib / Seaborn – Data visualization
-- FastAPI + Uvicorn – Backend server
+## Architecture
 
-## 📦 Installation
-
-1. **Create Virtual Environment**
-   ```bash
-   python -m venv venv
-   ```
-
-   Activate it:
-
-   - **Linux / macOS**
-     ```bash
-     source venv/bin/activate
-     ```
-
-   - **Windows**
-     ```bash
-     venv\Scripts\activate
-     ```
-
-2. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-## ▶️ Usage
-
-- **Start Streamlit UI**
-  ```bash
-  streamlit run app.py
-  ```
-
-- **Start FastAPI Backend**
-  ```bash
-  uvicorn server:app --reload
-  ```
-
-Open in browser:
-
-- Streamlit UI: http://localhost:8501
-- API Server: http://127.0.0.1:8000
-
-## 📊 Using the App
-
-1. Enter stock symbol (e.g., AAPL, GOOGL, TSLA, MSFT)
-2. Select time period
-3. Click "Analyze Stock"
-4. View predictions, charts & sentiment analysis
-
-## 🤖 Machine Learning Models
-
-- **Linear Regression**  
-  Simple & interpretable  
-  Detects linear trends  
-  Fast training
-
-- **Random Forest**  
-  Ensemble trees  
-  Handles non-linear patterns  
-  Resistant to overfitting
-
-- **Gradient Boosting**  
-  Sequential learning  
-  High accuracy  
-  Great for complex data
-
-## 📁 Project Structure
-
-```
-GreenToBuy-ML/
-├── app.py
-├── server.py
-├── models/
-├── utils/
-├── requirements.txt
-└── README.md
+```text
+Streamlit dashboard (app.py)
+          │ HTTP
+FastAPI service (server.py)
+       ┌──┴──────────┐
+Market data       Forecasting
+(market_data.py)  (forecasting.py)
+       │               │
+Yahoo Finance    pandas / scikit-learn
+SQLite cache
 ```
 
-## 🛑 Troubleshooting Missing Modules
+`market_data.py` handles ticker validation, Yahoo Finance downloads, OHLCV checks, retries, and SQLite caching. `forecasting.py` builds features using information available at each bar, evaluates models chronologically, and fits the selected model for the requested horizon. The UI calls the API and renders only values returned by the service.
 
-If you encounter import errors for missing packages:
+## Requirements and setup
+
+Python 3.10 or newer is recommended.
 
 ```bash
-pip install <module_name>
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install -r requirements.txt
 ```
 
-(Ensure your virtual environment is activated.)
+Start the API and dashboard in separate terminals:
 
-# Data Sources
+```bash
+uvicorn server:app --reload
+streamlit run app.py
+```
 
-The application fetches real-time stock data using the **yfinance** API (Yahoo Finance), which provides:
-- Historical stock prices
-- Volume data
-- Market indicators
-- Company information
+Open <http://localhost:8501>. The dashboard expects the API at `http://127.0.0.1:8000`. Set `GREENTOBUY_API_URL` to use another API address. The API health check is available at `/health`; interactive API documentation is at `/docs`.
 
-## Disclaimer
+## Forecasting and evaluation
 
-This application is for educational and research purposes only. Stock price predictions are inherently uncertain and should not be used as the sole basis for investment decisions. Always consult with financial professionals and conduct thorough research before making investment choices.
+The API accepts `interval` (`daily`, `60min`, `15min`, or `5min`), `horizon` (1, 5, 10, or 30 trading bars), and `model` (`auto`, `ridge`, or `random forest`) parameters. For example:
 
-**Important**: Past performance does not guarantee future results. Stock markets are volatile and unpredictable.
+```text
+/api/stock/AAPL?interval=daily&horizon=5&model=auto
+```
 
-## Contributing
+Each feature row uses its bar and earlier observations. The target is the closing price at the requested horizon. Walk-forward test folds are chronological and include a gap equal to the forecast horizon, so training labels do not overlap validation periods. Automatic selection chooses the model with lower validation MAE. Results include MAE, RMSE, MAPE, R², directional accuracy, and an unchanged-close benchmark. A 90th percentile absolute validation error range is shown as an error range; it is not a calibrated probability interval.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/new-feature`)
-3. Commit your changes (`git commit -am 'Add new feature'`)
-4. Push to the branch (`git push origin feature/new-feature`)
-5. Create a Pull Request
+The model comparison is limited to Ridge regression and Random Forest. There is no claim that either model beats the benchmark or will be profitable. The forecasting code requires enough history for the 200-bar feature and validation folds; short history returns a clear error.
 
-## License
+## Tests
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+Run the unit tests with:
 
-## Support
+```bash
+python -m unittest discover -s tests -v
+```
 
-If you encounter any issues or have questions:
-- Open an issue on GitHub
-- Check the documentation
-- Review existing issues for similar problems
+The tests use deterministic synthetic prices and do not call external data services. Live Yahoo Finance availability and rate limits depend on the upstream service.
 
-## Acknowledgments
+## Limitations and next steps
 
-- **Yahoo Finance (yfinance)** for providing free stock data API
-- **TA-Lib** for technical analysis indicators
-- **NLTK VADER** for sentiment analysis
-- Scikit-learn contributors for machine learning tools
-- Streamlit team for the amazing web framework
-- FastAPI team for the high-performance backend
+- Yahoo Finance is an unofficial data source and may throttle or change its response.
+- Cached history may be returned if a refresh fails; the API timestamp identifies the last market bar.
+- Intraday horizons are expressed in bars and do not account for exchange holidays or market session boundaries.
+- The validation error range is descriptive and should not be interpreted as a confidence interval.
+- Additional model families should be added only when walk-forward results show measurable value.
