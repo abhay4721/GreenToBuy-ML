@@ -1,3 +1,6 @@
 /.env
 /stock_data.db
 /venv/
+/paper_trading.db
+/__pycache__/
+/tests/__pycache__/

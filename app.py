@@ -81,6 +81,76 @@ with st.sidebar:
     analyze = st.button("Run analysis", type="primary", use_container_width=True)
     st.caption("Forecasts are statistical estimates, not guaranteed future prices.")
 
+
+@st.fragment(run_every=2)
+def realtime_paper_panel(ticker: str) -> None:
+    st.subheader("Live quote · paper trading")
+    previous_ticker = st.session_state.get("_realtime_ticker")
+    if previous_ticker and previous_ticker != ticker:
+        try:
+            requests.delete(f"{API_URL}/api/realtime/quote/{previous_ticker}", timeout=3)
+        except requests.RequestException:
+            pass
+    st.session_state["_realtime_ticker"] = ticker
+    try:
+        response = requests.get(f"{API_URL}/api/realtime/quote/{ticker}", timeout=4)
+        if response.status_code >= 400:
+            detail = response.json().get("detail", response.text)
+            st.info(f"Live quote unavailable: {detail}")
+            return
+        quote = response.json()
+    except requests.RequestException as exc:
+        st.info(f"Live quote API unavailable: {exc}")
+        return
+
+    if quote.get("status") == "connecting":
+        st.caption("Connecting to the market-data stream…")
+        return
+    if quote.get("status") != "live":
+        st.warning(quote.get("detail", "No live quote received from the provider."))
+        return
+
+    quote_columns = st.columns(4)
+    quote_columns[0].metric("Live price", f"{quote['price']:,.5f}".rstrip("0").rstrip("."))
+    quote_columns[1].metric("Bid", f"{quote['bid']:,.5f}".rstrip("0").rstrip(".") if quote.get("bid") is not None else "—")
+    quote_columns[2].metric("Ask", f"{quote['ask']:,.5f}".rstrip("0").rstrip(".") if quote.get("ask") is not None else "—")
+    quote_columns[3].metric("Quote time (UTC)", quote["timestamp"])
+    st.caption(f"Twelve Data instrument: {quote.get('provider_symbol')} · Exchange: {quote.get('exchange') or 'Forex'}")
+
+    if ticker.startswith("^"):
+        st.caption("Index quotes are view-only in the paper order panel.")
+    else:
+        with st.form(f"paper_order_{ticker}"):
+            side_col, quantity_col = st.columns(2)
+            side = side_col.selectbox("Paper side", ["BUY", "SELL"], key=f"paper_side_{ticker}")
+            quantity = quantity_col.number_input("Quantity", min_value=0.000001, value=1.0, key=f"paper_quantity_{ticker}")
+            submitted = st.form_submit_button("Place paper order", type="primary")
+        if submitted:
+            try:
+                order_response = requests.post(
+                    f"{API_URL}/api/paper/orders",
+                    json={"symbol": ticker, "side": side, "quantity": quantity},
+                    timeout=5,
+                )
+                order_response.raise_for_status()
+                st.success(f"Paper {side.lower()} {quantity:g} {ticker} at {order_response.json()['fill_price']:,.5f}. No broker order was sent.")
+            except requests.RequestException as exc:
+                detail = exc.response.json().get("detail", str(exc)) if exc.response is not None else str(exc)
+                st.error(f"Paper order rejected: {detail}")
+
+    try:
+        positions_response = requests.get(f"{API_URL}/api/paper/positions", timeout=3)
+        positions_response.raise_for_status()
+        paper_positions = positions_response.json()
+        if paper_positions:
+            st.caption("Local simulated positions")
+            st.dataframe(pd.DataFrame(paper_positions), hide_index=True, use_container_width=True)
+    except requests.RequestException:
+        pass
+
+
+realtime_paper_panel(symbol)
+
 if analyze:
     if not symbol:
         st.error("Enter a ticker symbol.")

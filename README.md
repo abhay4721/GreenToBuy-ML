@@ -15,6 +15,7 @@ Forecasts are estimates from historical data. They do not account for future new
 - A Streamlit dashboard with candlesticks, forecast range, latest indicators, and validation results.
 - Curated Indian listings and NIFTY 50, NIFTY Bank, and SENSEX indices through Yahoo Finance symbols.
 - India-profile trend and volume feature tuning; forex auto mode evaluates a validation-weighted model blend with a baseline guard.
+- Live quote streaming and a local paper-order ledger for Indian listings and forex pairs.
 
 ## Architecture
 
@@ -31,6 +32,8 @@ SQLite cache
 ```
 
 `market_data.py` handles ticker validation, Yahoo Finance downloads, OHLCV checks, retries, and SQLite caching. `forecasting.py` builds features using information available at each bar, evaluates models chronologically, and fits the selected model for the requested horizon. The UI calls the API and renders only values returned by the service.
+
+`realtime.py` maintains a shared Twelve Data price WebSocket and exposes the most recent tick through the API. `paper_trading.py` records simulated fills and positions in a separate `paper_trading.db`; it never submits orders to a broker.
 
 ## Requirements and setup
 
@@ -50,6 +53,17 @@ streamlit run app.py
 ```
 
 Open <http://localhost:8501>. The dashboard expects the API at `http://127.0.0.1:8000`. Set `GREENTOBUY_API_URL` to use another API address. The API health check is available at `/health`; interactive API documentation is at `/docs`.
+
+For live quotes, put your Twelve Data key in the ignored local `.env` file and restart the API:
+
+```text
+TWELVE_DATA_API_KEY=your_key
+MAX_REALTIME_SYMBOLS=8
+```
+
+The `/api/realtime/quote/{symbol}` endpoint subscribes to a live price stream; `/api/realtime/status` reports provider connection status. The default stream limit is 8 symbols and can be adjusted to fit the provider plan. Twelve Data allows only trial symbols on lower-tier plans; full WebSocket access and symbol coverage depend on the subscription. See [Twelve Data WebSocket docs](https://twelvedata.com/docs/websocket/websocket-getting-started) and [plan details](https://twelvedata.com/pricing).
+
+The live quote panel supports **paper orders only**. `POST /api/paper/orders` accepts `symbol`, `side` (`BUY` or `SELL`), and `quantity`. Fills use the current ask for buys and bid for sells when supplied, otherwise the last price. Quotes older than 60 seconds and sells larger than the simulated position are rejected. Paper orders and positions remain local in `paper_trading.db`; there is no broker authentication or live order endpoint.
 
 ## Forecasting and evaluation
 
