@@ -1,4 +1,5 @@
 import unittest
+import json
 
 import numpy as np
 import pandas as pd
@@ -6,6 +7,7 @@ from fastapi import HTTPException
 
 from forecasting import build_features, forecast
 from market_data import market_profile, normalize_symbol, validate_market_data, yahoo_ticker
+from quant_analysis import analyze_market
 from server import get_stock_analysis, health
 
 
@@ -30,7 +32,7 @@ class DataPipelineTests(unittest.TestCase):
             get_stock_analysis("AAPL", interval="weekly")
         self.assertEqual(invalid_interval.exception.status_code, 422)
         with self.assertRaises(HTTPException) as invalid_horizon:
-            get_stock_analysis("AAPL", horizon=3)
+            get_stock_analysis("AAPL", horizon=2)
         self.assertEqual(invalid_horizon.exception.status_code, 422)
 
     def test_symbol_normalization_and_rejection(self):
@@ -61,9 +63,16 @@ class DataPipelineTests(unittest.TestCase):
         self.assertIn("adx", baseline.columns)
         self.assertIn("obv", baseline.columns)
 
+    def test_quant_diagnostics_are_finite_or_explicitly_missing(self):
+        data = sample_data(260)
+        diagnostics, risk = analyze_market(data, 5)
+        self.assertIn("rule-based", diagnostics["regime_method"])
+        self.assertGreaterEqual(risk["ewma_volatility_pct_per_bar"], 0)
+        json.dumps({"diagnostics": diagnostics, "risk": risk}, allow_nan=False)
+
     def test_forecast_metrics_and_horizons(self):
         data = sample_data(650)
-        for horizon in (1, 5, 10, 30):
+        for horizon in (1, 3, 5, 10, 20, 30):
             with self.subTest(horizon=horizon):
                 result = forecast(data, horizon=horizon, model_choice="ridge")
                 self.assertGreater(result.forecast, 0)
@@ -77,6 +86,13 @@ class DataPipelineTests(unittest.TestCase):
                     {"Ridge", "Random Forest", "Extra Trees", "Hist Gradient Boosting", "SVR", "Weighted Ensemble", "Naïve: unchanged close"},
                 )
                 self.assertEqual(result.validation_points, 40)
+                self.assertIn("regime", result.diagnostics)
+                self.assertIn("ewma_volatility_pct_per_bar", result.risk)
+                self.assertGreaterEqual(result.probability_positive, 0)
+                self.assertLessEqual(result.probability_positive, 100)
+                self.assertIn("95", result.uncertainty["intervals"])
+                self.assertIn("holdout_coverage_pct", result.uncertainty["intervals"]["90"])
+                self.assertIn("training_seconds", result.metrics)
 
     def test_weighted_ensemble_uses_validation_weights(self):
         result = forecast(sample_data(650), horizon=5, model_choice="auto", market_profile="forex")
@@ -95,7 +111,7 @@ class DataPipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "250"):
             forecast(sample_data(120))
         with self.assertRaises(ValueError):
-            forecast(sample_data(), horizon=3)
+            forecast(sample_data(), horizon=2)
 
 
 if __name__ == "__main__":

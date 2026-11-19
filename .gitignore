@@ -2,5 +2,6 @@
 /stock_data.db
 /venv/
 /paper_trading.db
+/research_history.db
 /__pycache__/
 /tests/__pycache__/

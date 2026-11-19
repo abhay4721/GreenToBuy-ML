@@ -67,7 +67,7 @@ with st.sidebar:
     symbol = custom_ticker or selected_ticker
     interval = st.selectbox("Market interval", ["daily", "60min", "15min", "5min"])
     horizon_unit = "trading day" if interval == "daily" else "bar"
-    horizon = st.selectbox("Forecast horizon", [1, 5, 10, 30], format_func=lambda x: f"{x} {horizon_unit if x == 1 else horizon_unit + 's'}")
+    horizon = st.selectbox("Forecast horizon", [1, 3, 5, 10, 20, 30], format_func=lambda x: f"{x} {horizon_unit if x == 1 else horizon_unit + 's'}")
     model_labels = {
         "auto": "Best model by time-series CV",
         "weighted ensemble": "Validation-weighted ensemble",
@@ -170,6 +170,7 @@ if analyze:
             st.stop()
 
     forecast = result["forecast"]
+    st.caption(f"Research run: {result.get('experiment_id') or 'not saved'}")
     current = result["latest_price"]["price"]
     expected = (forecast["forecast"] / current - 1) * 100 if current else 0
     st.subheader(f"{result['symbol']} · {result['interval']}")
@@ -194,7 +195,7 @@ if analyze:
         future_time = last_time + pd.Timedelta(minutes={"5min": 5, "15min": 15, "60min": 60}[interval] * horizon)
     band = forecast["uncertainty"]
     fig.add_trace(go.Scatter(x=[last_time, future_time], y=[current, forecast["forecast"]], mode="lines+markers", name="Forecast", line={"color": "#42d392", "dash": "dash", "width": 2}))
-    fig.add_trace(go.Scatter(x=[future_time, future_time], y=[band["lower"], band["upper"]], mode="lines", name="90% validation error range", line={"color": "#f2b84b", "width": 7}, opacity=0.55))
+    fig.add_trace(go.Scatter(x=[future_time, future_time], y=[band["lower"], band["upper"]], mode="lines", name="90% selection-residual interval", line={"color": "#f2b84b", "width": 7}, opacity=0.55))
     fig.update_layout(template="plotly_dark", height=510, xaxis_rangeslider_visible=False, margin={"l": 10, "r": 10, "t": 20, "b": 10}, legend={"orientation": "h", "y": 1.02})
     st.plotly_chart(fig, use_container_width=True)
 
@@ -204,7 +205,7 @@ if analyze:
         st.caption(f"{forecast['validation_points']} untouched chronological holdout predictions · evaluated through {forecast['validation_end']}")
         score_rows = []
         for name, values in forecast["model_comparison"].items():
-            score_rows.append({"Method": name, "Selection MAE (% return)": f"{values['selection_mae']:.3f}", "Holdout MAE": f"{values['mae']:.3f}", "RMSE": f"{values['rmse']:.3f}", "MAPE (%)": f"{values['mape']:.3f}", "R²": f"{values['r2']:.3f}", "Direction (%)": f"{values['directional_accuracy']:.1f}"})
+            score_rows.append({"Method": name, "Selection MAE (% return)": f"{values['selection_mae']:.3f}", "Holdout MAE": f"{values['mae']:.3f}", "RMSE": f"{values['rmse']:.3f}", "MAPE (%)": f"{values['mape']:.3f}", "R²": f"{values['r2']:.3f}", "Direction (%)": f"{values['directional_accuracy']:.1f}", "Training (s)": f"{values['training_seconds']:.2f}"})
         st.dataframe(pd.DataFrame(score_rows).set_index("Method"), use_container_width=True)
         if forecast["model"] == "Naïve: unchanged close":
             st.info("No candidate cleared the 5% selection-fold improvement hurdle over the unchanged-close benchmark, so the forecast uses that baseline.")
@@ -212,11 +213,44 @@ if analyze:
             st.info("The selected model did not beat the unchanged-close benchmark on the chronological holdout MAE.")
         if forecast["ensemble_weights"]:
             st.caption("Forex validation blend weights: " + ", ".join(f"{name} {weight:.0%}" for name, weight in forecast["ensemble_weights"].items()))
+        st.caption(f"Selection-residual probability of positive return: {forecast['probability_positive']:.1f}% · Selection interval coverage on holdout: {forecast['uncertainty']['intervals']['90']['holdout_coverage_pct']:.1f}%")
     with right:
         st.subheader("Latest indicators")
         indicators = result["indicators"]
         show = {"SMA 20": "sma_20", "SMA 50": "sma_50", "SMA 200": "sma_200", "RSI 14": "rsi", "MACD": "macd", "ATR 14": "atr", "ADX 14": "adx", "Bollinger upper": "bb_upper", "Bollinger lower": "bb_lower"}
         st.dataframe(pd.DataFrame([{"Indicator": label, "Value": f"{indicators[key]:,.3f}" if indicators[key] is not None else "Not enough history"} for label, key in show.items()]).set_index("Indicator"), use_container_width=True)
-        st.caption(f"Forecast range uses the {band['method']}; it is a validation error range, not a calibrated probability interval.")
+        st.caption(f"Return-residual interval method: {band['method']}. Holdout coverage is shown above; it is not a guarantee.")
+        st.subheader("Quantitative state and risk")
+        st.caption(result["diagnostics"]["regime"])
+        st.write(f"Hurst estimate: {result['diagnostics']['hurst_estimate']:.3f}" if result["diagnostics"]["hurst_estimate"] is not None else "Hurst estimate: insufficient history")
+        st.write(f"EWMA volatility per bar: {result['risk']['ewma_volatility_pct_per_bar']:.3f}%")
+        st.write(f"{horizon}-bar square-root-time volatility estimate: {result['risk']['sqrt_time_horizon_volatility_pct']:.3f}%")
+        st.caption(result["risk"]["range_assumption"])
+
+    with st.expander("Recent saved forecast runs"):
+        try:
+            history_response = requests.get(
+                f"{API_URL}/api/research/history",
+                params={"symbol": result["symbol"], "limit": 20},
+                timeout=10,
+            )
+            history_response.raise_for_status()
+            runs = history_response.json()
+            if runs:
+                history_rows = [{
+                    "Run": run["experiment_id"][:8],
+                    "Time": run["created_at"],
+                    "Horizon (bars)": run["horizon"],
+                    "Model": run["selected_model"],
+                    "Forecast": run["forecast_price"],
+                    "Return (%)": run["return_forecast_pct"],
+                    "Holdout MAE": run["metrics"]["selected"]["mae"],
+                } for run in runs]
+                st.dataframe(pd.DataFrame(history_rows), hide_index=True, use_container_width=True)
+                st.caption("Saved forecasts and their historical holdout scores. Future realized outcomes are not yet joined to these runs.")
+            else:
+                st.caption("No saved runs for this symbol yet.")
+        except requests.RequestException as exc:
+            st.caption(f"Run history is unavailable: {exc}")
 else:
     st.info("Choose a ticker and analysis settings, then run an analysis.")

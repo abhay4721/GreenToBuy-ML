@@ -18,6 +18,7 @@ from forecasting import build_features, forecast
 from market_data import INTERVALS, get_stock_data, market_profile, normalize_symbol
 from paper_trading import order_history, place_paper_order, positions
 from realtime import RealtimeUnavailable, TwelveDataStream
+from research_store import recent_experiments, record_experiment
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,6 +42,18 @@ class PaperOrderRequest(BaseModel):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/research/history")
+def research_history(
+    symbol: str | None = Query(None, min_length=1, max_length=20),
+    limit: int = Query(50, ge=1, le=500),
+) -> list[dict]:
+    try:
+        normalized = normalize_symbol(symbol) if symbol else None
+        return recent_experiments(normalized, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/realtime/status")
@@ -109,15 +122,15 @@ async def shutdown_realtime_feed() -> None:
 def get_stock_analysis(
     symbol: str,
     interval: str = Query("daily", description="One of 5min, 15min, 60min, daily"),
-    horizon: int = Query(1, description="Trading bars ahead: 1, 5, 10, or 30"),
+    horizon: int = Query(1, description="Trading bars ahead: 1, 3, 5, 10, 20, or 30"),
     model: str = Query("auto", description="auto, weighted ensemble, ridge, random forest, extra trees, hist gradient boosting, or svr"),
 ) -> dict:
     try:
         ticker = normalize_symbol(symbol)
         if interval not in INTERVALS:
             raise HTTPException(status_code=422, detail=f"Interval must be one of: {', '.join(INTERVALS)}")
-        if horizon not in (1, 5, 10, 30):
-            raise HTTPException(status_code=422, detail="Horizon must be 1, 5, 10, or 30 trading bars.")
+        if horizon not in (1, 3, 5, 10, 20, 30):
+            raise HTTPException(status_code=422, detail="Horizon must be 1, 3, 5, 10, 20, or 30 trading bars.")
         if model.lower() not in ("auto", "weighted ensemble", "ridge", "random forest", "extra trees", "hist gradient boosting", "svr"):
             raise HTTPException(status_code=422, detail="Choose auto, weighted ensemble, ridge, random forest, extra trees, hist gradient boosting, or svr.")
         data = get_stock_data(ticker, interval)
@@ -136,7 +149,7 @@ def get_stock_analysis(
     indicator_names = ("sma_20", "sma_50", "sma_200", "rsi", "macd", "atr", "adx", "bb_upper", "bb_lower")
     indicators = {name: (float(latest_features[name]) if pd.notna(latest_features[name]) else None) for name in indicator_names}
     rows = data.tail(250 if interval == "daily" else 300)
-    return {
+    response = {
         "symbol": ticker,
         "market_profile": result.market_profile,
         "interval": interval,
@@ -144,9 +157,24 @@ def get_stock_analysis(
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "latest_price": {"price": result.reference_price, "timestamp": data.index[-1].isoformat()},
         "forecast": result.to_dict(),
+        "diagnostics": result.diagnostics,
+        "risk": result.risk,
         "indicators": indicators,
         "chart_data": [
             {"x": timestamp.isoformat(), "o": float(row.open), "h": float(row.high), "l": float(row.low), "c": float(row.close), "v": float(row.volume) if pd.notna(row.volume) else None}
             for timestamp, row in rows.iterrows()
         ],
     }
+    try:
+        response["experiment_id"] = record_experiment(
+            ticker,
+            interval,
+            model,
+            response,
+            list(features.columns),
+            str(features.dropna().index[0].isoformat()),
+        )
+    except Exception:
+        logger.exception("Could not persist research run for %s", ticker)
+        response["experiment_id"] = None
+    return response

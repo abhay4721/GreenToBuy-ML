@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,7 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVR
+from quant_analysis import analyze_market
 
 MAX_TRAINING_ROWS = 1_500
 MIN_SELECTION_EDGE = 0.05
@@ -31,7 +33,12 @@ class ForecastResult:
     naive_metrics: dict[str, float]
     model_comparison: dict[str, dict[str, float]]
     ensemble_weights: dict[str, float]
-    uncertainty: dict[str, float | str]
+    diagnostics: dict[str, Any]
+    risk: dict[str, Any]
+    uncertainty: dict[str, Any]
+    training_seconds: float
+    return_forecast_pct: float
+    probability_positive: float
     validation_points: int
     validation_end: str
 
@@ -155,14 +162,15 @@ def _fit_recent(estimator, x: pd.DataFrame, y: np.ndarray):
 
 
 def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", market_profile: str = "global_equity") -> ForecastResult:
-    if horizon not in (1, 5, 10, 30):
-        raise ValueError("Horizon must be 1, 5, 10, or 30 trading days.")
+    if horizon not in (1, 3, 5, 10, 20, 30):
+        raise ValueError("Horizon must be 1, 3, 5, 10, 20, or 30 trading bars.")
     choices = ("auto", "ridge", "random forest", "extra trees", "hist gradient boosting", "svr", "weighted ensemble")
     if model_choice.lower() not in choices:
         raise ValueError(f"Model must be one of: {', '.join(choices)}.")
     if len(data) < 250:
         raise ValueError("At least 250 valid price rows are required to calculate the 200-bar trend features and evaluate a forecast.")
 
+    diagnostics, risk = analyze_market(data, horizon)
     features = build_features(data)
     future_price = data["close"].shift(-horizon).rename("future_price")
     target_return = (future_price / data["close"] - 1).rename("target_return")
@@ -187,19 +195,24 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
 
     candidates = _candidates(market_profile)
     selection_mae: dict[str, float] = {}
+    selection_seconds: dict[str, float] = {}
     candidate_oof: dict[str, list[float]] = {}
     selection_actual: list[float] = []
     for label, family, params in candidates:
         errors = []
         oof_prediction: list[float] = []
+        elapsed = 0.0
         for train_idx, valid_idx in splitter.split(development_x):
             estimator = _model(family, params)
+            fit_started = perf_counter()
             _fit_recent(estimator, development_x.iloc[train_idx], development_y[train_idx])
             estimate = estimator.predict(development_x.iloc[valid_idx])
+            elapsed += perf_counter() - fit_started
             errors.append(mean_absolute_error(development_y[valid_idx], estimate))
             oof_prediction.extend(estimate.tolist())
         candidate_oof[label] = oof_prediction
         selection_mae[label] = float(np.mean(errors))
+        selection_seconds[label] = elapsed
     for _, valid_idx in splitter.split(development_x):
         selection_actual.extend(development_y[valid_idx].tolist())
 
@@ -220,10 +233,13 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
     holdout_x, holdout_y = x.iloc[holdout_start:], actual_price[holdout_start:]
     holdout_previous = prior_close[holdout_start:]
     holdout_predictions: dict[str, np.ndarray] = {}
+    holdout_seconds: dict[str, float] = {}
     for family, (label, params) in best_by_family.items():
         estimator = _model(family, params)
+        fit_started = perf_counter()
         _fit_recent(estimator, x.iloc[:holdout_train_end], y[:holdout_train_end])
         predicted_return = estimator.predict(holdout_x)
+        holdout_seconds[family] = perf_counter() - fit_started
         holdout_predictions[family] = holdout_previous * (1 + predicted_return)
 
     # Blend weights use only the earlier model-selection folds. The final holdout
@@ -247,6 +263,12 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
     for family, prediction in holdout_predictions.items():
         row = _metrics(holdout_y, prediction, holdout_previous)
         if family == "Weighted Ensemble":
+            row["training_seconds"] = sum(holdout_seconds.values()) + sum(selection_seconds[label] for label, _ in best_by_family.values())
+        elif family == "Naïve: unchanged close":
+            row["training_seconds"] = 0.0
+        else:
+            row["training_seconds"] = holdout_seconds[family] + selection_seconds[best_by_family[family][0]]
+        if family == "Weighted Ensemble":
             row["selection_mae"] = 100 * ensemble_selection_mae
         elif family == "Naïve: unchanged close":
             row["selection_mae"] = 100 * naive_selection_mae
@@ -262,6 +284,16 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
             selected_family = "Naïve: unchanged close"
     selected_holdout = holdout_predictions[selected_family]
     metrics = comparison[selected_family]
+    if selected_family == "Weighted Ensemble":
+        selection_prediction = ensemble_oof
+    elif selected_family == "Naïve: unchanged close":
+        selection_prediction = np.zeros(len(selection_actual))
+    else:
+        selection_prediction = np.asarray(candidate_oof[best_by_family[selected_family][0]])
+    calibration_errors = np.asarray(selection_actual) - np.asarray(selection_prediction)
+    holdout_actual_returns = holdout_y / holdout_previous - 1
+    holdout_prediction_returns = selected_holdout / holdout_previous - 1
+    holdout_errors = holdout_actual_returns - holdout_prediction_returns
 
     # Refit chosen model(s) on every label now available, then forecast from the
     # latest feature row. The holdout is used only to report historical errors.
@@ -273,21 +305,31 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
         for family, weight in weights.items():
             _, params = best_by_family[family]
             estimator = _model(family, params)
+            fit_started = perf_counter()
             _fit_recent(estimator, x, y)
             predicted_return += float(estimator.predict(latest_features)[0]) * weight
+            metrics["training_seconds"] += perf_counter() - fit_started
     elif selected_family == "Naïve: unchanged close":
         predicted_return = 0.0
     else:
         _, params = best_by_family[selected_family]
         estimator = _model(selected_family, params)
+        fit_started = perf_counter()
         _fit_recent(estimator, x, y)
         predicted_return = float(estimator.predict(latest_features)[0])
+        metrics["training_seconds"] += perf_counter() - fit_started
     selected_model = selected_family if selected_family in ("Weighted Ensemble", "Naïve: unchanged close") else best_by_family[selected_family][0]
     reference_price = float(data["close"].iloc[-1])
     value = max(0.0, reference_price * (1 + predicted_return))
 
-    residuals = np.abs(holdout_y - selected_holdout)
-    radius = float(np.quantile(residuals, 0.9))
+    intervals: dict[str, dict[str, float]] = {}
+    for label, tail_probability in (("80", 0.10), ("90", 0.05), ("95", 0.025)):
+        lower_error, upper_error = np.quantile(calibration_errors, [tail_probability, 1 - tail_probability])
+        lower = max(0.0, reference_price * (1 + predicted_return + lower_error))
+        upper = max(lower, reference_price * (1 + predicted_return + upper_error))
+        coverage = float(np.mean((holdout_errors >= lower_error) & (holdout_errors <= upper_error)) * 100)
+        intervals[label] = {"lower": float(lower), "upper": float(upper), "holdout_coverage_pct": coverage}
+    probability_positive = float(np.mean(predicted_return + calibration_errors > 0) * 100)
     return ForecastResult(
         forecast=value,
         reference_price=reference_price,
@@ -298,7 +340,17 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
         naive_metrics=naive,
         model_comparison=comparison,
         ensemble_weights=weights if selected_family == "Weighted Ensemble" or (market_profile == "forex" and model_choice.lower() == "auto") else {},
-        uncertainty={"lower": max(0.0, value - radius), "upper": value + radius, "method": "90th percentile of untouched chronological holdout absolute errors"},
+        diagnostics=diagnostics,
+        risk=risk,
+        uncertainty={
+            "lower": intervals["90"]["lower"],
+            "upper": intervals["90"]["upper"],
+            "intervals": intervals,
+            "method": "Return-residual quantiles from selection folds; coverage measured on the untouched holdout.",
+        },
+        training_seconds=float(metrics["training_seconds"]),
+        return_forecast_pct=float(predicted_return * 100),
+        probability_positive=probability_positive,
         validation_points=len(holdout_y),
         validation_end=str(data.index[-1].isoformat() if hasattr(data.index[-1], "isoformat") else data.index[-1]),
     )
