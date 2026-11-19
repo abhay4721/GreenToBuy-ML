@@ -1,6 +1,6 @@
 # GreenToBuy
 
-GreenToBuy is a market analysis application built with FastAPI and Streamlit. It loads Yahoo Finance OHLCV history, calculates technical features, compares regression and tree models with chronological validation, and displays a direct forecast for a selected horizon.
+GreenToBuy is a Streamlit market analysis app. It downloads Yahoo Finance OHLCV data directly through `yfinance`, calculates technical features, compares regression and tree models with chronological validation, and displays a forecast for a selected horizon. The dashboard does not need a local API server or a market-data API key.
 
 Forecasts are estimates from historical data. They do not account for future news, corporate actions beyond the source data, or changing market conditions, and are not investment advice.
 
@@ -25,19 +25,15 @@ Forecasts are estimates from historical data. They do not account for future new
 
 ```text
 Streamlit dashboard (app.py)
-          │ HTTP
-FastAPI service (server.py)
-       ┌──┴──────────┐
-Market data       Forecasting
-(market_data.py)  (forecasting.py)
-       │               │
-Yahoo Finance    pandas / scikit-learn
-SQLite cache
+       │ direct Python calls
+       ├── Yahoo Finance data (market_data.py / yfinance)
+       ├── Forecasting (forecasting.py / scikit-learn)
+       └── Local SQLite stores
 ```
 
-`market_data.py` handles ticker validation, Yahoo Finance downloads, OHLCV checks, retries, and SQLite caching. `forecasting.py` builds features using information available at each bar, evaluates models chronologically, and fits the selected model for the requested horizon. `quant_analysis.py` computes descriptive diagnostics from historical bars. `research_store.py` stores completed run metadata and scores in a separate, ignored `research_history.db`. The UI calls the API and renders only values returned by the service.
+`market_data.py` handles ticker validation, direct Yahoo Finance downloads, OHLCV checks, retries, and SQLite caching. `local_analysis.py` calls data acquisition, forecasting, diagnostics, and research logging in-process. `forecasting.py` builds features using information available at each bar, evaluates models chronologically, and fits the selected model for the requested horizon. `quant_analysis.py` computes descriptive diagnostics from historical bars. `research_store.py` stores completed run metadata and scores in a separate, ignored `research_history.db`.
 
-`realtime.py` maintains a shared Twelve Data price WebSocket and exposes the most recent tick through the API. `paper_trading.py` records simulated fills and positions in a separate `paper_trading.db`; it never submits orders to a broker.
+`paper_trading.py` records simulated fills and positions in a separate, ignored `paper_trading.db`; it never submits orders to a broker. The quote panel refreshes the latest Yahoo Finance five-minute bar once a minute. Yahoo Finance may delay intraday data and does not provide an executable bid/ask.
 
 ## Requirements and setup
 
@@ -49,29 +45,21 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install -r requirements.txt
 ```
 
-Start the API and dashboard in separate terminals:
+Start the dashboard directly:
 
 ```bash
-uvicorn server:app --reload
 streamlit run app.py
 ```
 
-Open <http://localhost:8501>. The dashboard expects the API at `http://127.0.0.1:8000`. Set `GREENTOBUY_API_URL` to use another API address. The API health check is available at `/health`; interactive API documentation is at `/docs`.
+Open <http://localhost:8501>. The dashboard retrieves market history from Yahoo Finance directly. No local FastAPI process, `.env` configuration, Twelve Data key, or broker credentials are required. An optional FastAPI service remains available for clients that need HTTP endpoints, but the Streamlit dashboard does not call it.
 
-For live quotes, put your Twelve Data key in the ignored local `.env` file and restart the API:
-
-```text
-TWELVE_DATA_API_KEY=your_key
-MAX_REALTIME_SYMBOLS=8
-```
-
-The `/api/realtime/quote/{symbol}` endpoint subscribes to a live price stream; `/api/realtime/status` reports provider connection status. The default stream limit is 8 symbols and can be adjusted to fit the provider plan. Twelve Data allows only trial symbols on lower-tier plans; full WebSocket access and symbol coverage depend on the subscription. See [Twelve Data WebSocket docs](https://twelvedata.com/docs/websocket/websocket-getting-started) and [plan details](https://twelvedata.com/pricing).
-
-The live quote panel supports **paper orders only**. `POST /api/paper/orders` accepts `symbol`, `side` (`BUY` or `SELL`), and `quantity`. Fills use the current ask for buys and bid for sells when supplied, otherwise the last price. Quotes older than 60 seconds and sells larger than the simulated position are rejected. Paper orders and positions remain local in `paper_trading.db`; there is no broker authentication or live order endpoint.
+The quote panel supports **paper orders only**. It uses the latest Yahoo Finance five-minute close as a simulated fill and rejects bars older than 60 seconds; Yahoo may delay or omit intraday data, so paper orders may be unavailable. Positions and orders remain local in `paper_trading.db`; no broker order is sent.
 
 ## Forecasting and evaluation
 
-The dashboard ticker picker searches a curated list of US equities, ETFs, Indian equities, Indian indices, and supported forex aliases. Indian listings use Yahoo Finance `.NS`/`.BO` symbols; a separate field accepts other Yahoo Finance symbols. The API accepts `interval` (`daily`, `60min`, `15min`, or `5min`), `horizon` (1, 3, 5, 10, 20, or 30 trading bars), and `model` (`auto`, `weighted ensemble`, `ridge`, `random forest`, `extra trees`, `hist gradient boosting`, or `svr`). For example:
+The dashboard ticker picker searches a curated list of US equities, ETFs, Indian equities, Indian indices, and supported forex aliases. Indian listings use Yahoo Finance `.NS`/`.BO` symbols; a separate field accepts other Yahoo Finance symbols. Choose an interval (`daily`, `60min`, `15min`, or `5min`), horizon (1, 3, 5, 10, 20, or 30 bars), and model in the sidebar. Each analysis requests fresh history from Yahoo Finance, falling back to the local cache if the source is unavailable. `server.py` provides an optional API for integrations, but is not part of the dashboard's data path.
+
+For integrations that choose to run the optional HTTP service:
 
 ```text
 /api/stock/AAPL?interval=daily&horizon=5&model=auto

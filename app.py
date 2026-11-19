@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import os
+from datetime import datetime, timezone
 
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import streamlit as st
+from local_analysis import analyze_symbol
+from market_data import get_stock_data, market_profile
+from paper_trading import order_history, place_paper_order, positions
+from research_store import recent_experiments
 
 st.set_page_config(page_title="GreenToBuy | Market Analytics", page_icon="📈", layout="wide")
-API_URL = os.getenv("GREENTOBUY_API_URL", "http://127.0.0.1:8000")
 TICKERS = {
     "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "NVIDIA", "AMZN": "Amazon", "GOOGL": "Alphabet",
     "META": "Meta Platforms", "TSLA": "Tesla", "AVGO": "Broadcom", "BRK-B": "Berkshire Hathaway",
@@ -82,40 +84,36 @@ with st.sidebar:
     st.caption("Forecasts are statistical estimates, not guaranteed future prices.")
 
 
-@st.fragment(run_every=2)
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_latest_quote(ticker: str) -> dict:
+    data = get_stock_data(ticker, "5min", force_refresh=True)
+    timestamp = data.index[-1]
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - timestamp.to_pydatetime()).total_seconds())
+    return {
+        "symbol": ticker,
+        "status": "live" if age_seconds <= 60 else "stale",
+        "price": float(data["close"].iloc[-1]),
+        "timestamp": timestamp.isoformat(),
+        "age_seconds": age_seconds,
+        "currency": "INR" if market_profile(ticker) == "india" else None,
+    }
+
+
+@st.fragment(run_every=60)
 def realtime_paper_panel(ticker: str) -> None:
-    st.subheader("Live quote · paper trading")
-    previous_ticker = st.session_state.get("_realtime_ticker")
-    if previous_ticker and previous_ticker != ticker:
-        try:
-            requests.delete(f"{API_URL}/api/realtime/quote/{previous_ticker}", timeout=3)
-        except requests.RequestException:
-            pass
-    st.session_state["_realtime_ticker"] = ticker
+    st.subheader("Latest Yahoo Finance bar · paper trading")
     try:
-        response = requests.get(f"{API_URL}/api/realtime/quote/{ticker}", timeout=4)
-        if response.status_code >= 400:
-            detail = response.json().get("detail", response.text)
-            st.info(f"Live quote unavailable: {detail}")
-            return
-        quote = response.json()
-    except requests.RequestException as exc:
-        st.info(f"Live quote API unavailable: {exc}")
+        quote = _fetch_latest_quote(ticker)
+    except Exception as exc:
+        st.info(f"Yahoo Finance quote unavailable: {exc}")
         return
 
-    if quote.get("status") == "connecting":
-        st.caption("Connecting to the market-data stream…")
-        return
-    if quote.get("status") != "live":
-        st.warning(quote.get("detail", "No live quote received from the provider."))
-        return
-
-    quote_columns = st.columns(4)
-    quote_columns[0].metric("Live price", f"{quote['price']:,.5f}".rstrip("0").rstrip("."))
-    quote_columns[1].metric("Bid", f"{quote['bid']:,.5f}".rstrip("0").rstrip(".") if quote.get("bid") is not None else "—")
-    quote_columns[2].metric("Ask", f"{quote['ask']:,.5f}".rstrip("0").rstrip(".") if quote.get("ask") is not None else "—")
-    quote_columns[3].metric("Quote time (UTC)", quote["timestamp"])
-    st.caption(f"Twelve Data instrument: {quote.get('provider_symbol')} · Exchange: {quote.get('exchange') or 'Forex'}")
+    if quote["status"] != "live":
+        st.warning("The latest Yahoo Finance 5-minute bar is older than 60 seconds. Paper orders require a fresh bar.")
+    quote_columns = st.columns(2)
+    quote_columns[0].metric("Latest price", f"{quote['price']:,.5f}".rstrip("0").rstrip("."))
+    quote_columns[1].metric("Bar time (UTC)", quote["timestamp"])
+    st.caption("Yahoo Finance intraday data may be delayed and does not provide a guaranteed executable bid/ask. Orders here are simulated locally.")
 
     if ticker.startswith("^"):
         st.caption("Index quotes are view-only in the paper order panel.")
@@ -127,26 +125,19 @@ def realtime_paper_panel(ticker: str) -> None:
             submitted = st.form_submit_button("Place paper order", type="primary")
         if submitted:
             try:
-                order_response = requests.post(
-                    f"{API_URL}/api/paper/orders",
-                    json={"symbol": ticker, "side": side, "quantity": quantity},
-                    timeout=5,
-                )
-                order_response.raise_for_status()
-                st.success(f"Paper {side.lower()} {quantity:g} {ticker} at {order_response.json()['fill_price']:,.5f}. No broker order was sent.")
-            except requests.RequestException as exc:
-                detail = exc.response.json().get("detail", str(exc)) if exc.response is not None else str(exc)
-                st.error(f"Paper order rejected: {detail}")
+                order_response = place_paper_order(ticker, side, quantity, quote)
+                st.success(f"Paper {side.lower()} {quantity:g} {ticker} at {order_response['fill_price']:,.5f}. No broker order was sent.")
+            except ValueError as exc:
+                st.error(f"Paper order rejected: {exc}")
 
-    try:
-        positions_response = requests.get(f"{API_URL}/api/paper/positions", timeout=3)
-        positions_response.raise_for_status()
-        paper_positions = positions_response.json()
-        if paper_positions:
-            st.caption("Local simulated positions")
-            st.dataframe(pd.DataFrame(paper_positions), hide_index=True, use_container_width=True)
-    except requests.RequestException:
-        pass
+    paper_positions = positions()
+    if paper_positions:
+        st.caption("Local simulated positions")
+        st.dataframe(pd.DataFrame(paper_positions), hide_index=True, use_container_width=True)
+    recent_orders = order_history(10)
+    if recent_orders:
+        st.caption("Recent local paper orders")
+        st.dataframe(pd.DataFrame(recent_orders), hide_index=True, use_container_width=True)
 
 
 realtime_paper_panel(symbol)
@@ -157,16 +148,9 @@ if analyze:
         st.stop()
     with st.spinner(f"Loading {symbol} market data and evaluating the model…"):
         try:
-            response = requests.get(
-                f"{API_URL}/api/stock/{symbol}",
-                params={"interval": interval, "horizon": horizon, "model": model},
-                timeout=120,
-            )
-            response.raise_for_status()
-            result = response.json()
-        except requests.RequestException as exc:
-            detail = exc.response.json().get("detail", str(exc)) if exc.response is not None else str(exc)
-            st.error(f"Analysis could not be completed: {detail}")
+            result = analyze_symbol(symbol, interval, horizon, model)
+        except Exception as exc:
+            st.error(f"Analysis could not be completed: {exc}")
             st.stop()
 
     forecast = result["forecast"]
@@ -179,7 +163,7 @@ if analyze:
     metrics[1].metric(f"{horizon}-bar forecast", f"{forecast['forecast']:,.2f}", f"{expected:+.2f}%")
     metrics[2].metric("Model", forecast["model"])
     metrics[3].metric("Holdout MAE", f"{forecast['metrics']['mae']:,.2f}")
-    st.caption(f"Market profile: {result['market_profile']} · Reference data: {result['latest_price']['timestamp']} · Analysis updated: {result['updated_at']}")
+    st.caption(f"Source: {result['data_source']} · Market profile: {result['market_profile']} · Latest bar: {result['latest_price']['timestamp']} · Analysis updated: {result['updated_at']}")
     if result["market_profile"] == "forex" and model == "auto":
         st.caption("Forex auto mode evaluates a weighted blend and uses it only when it clears the baseline hurdle.")
     elif result["market_profile"] == "india":
@@ -238,29 +222,20 @@ if analyze:
     st.plotly_chart(holdout_fig, use_container_width=True)
 
     with st.expander("Recent saved forecast runs"):
-        try:
-            history_response = requests.get(
-                f"{API_URL}/api/research/history",
-                params={"symbol": result["symbol"], "limit": 20},
-                timeout=10,
-            )
-            history_response.raise_for_status()
-            runs = history_response.json()
-            if runs:
-                history_rows = [{
-                    "Run": run["experiment_id"][:8],
-                    "Time": run["created_at"],
-                    "Horizon (bars)": run["horizon"],
-                    "Model": run["selected_model"],
-                    "Forecast": run["forecast_price"],
-                    "Return (%)": run["return_forecast_pct"],
-                    "Holdout MAE": run["metrics"]["selected"]["mae"],
-                } for run in runs]
-                st.dataframe(pd.DataFrame(history_rows), hide_index=True, use_container_width=True)
-                st.caption("Saved forecasts and their historical holdout scores. Future realized outcomes are not yet joined to these runs.")
-            else:
-                st.caption("No saved runs for this symbol yet.")
-        except requests.RequestException as exc:
-            st.caption(f"Run history is unavailable: {exc}")
+        runs = recent_experiments(result["symbol"], limit=20)
+        if runs:
+            history_rows = [{
+                "Run": run["experiment_id"][:8],
+                "Time": run["created_at"],
+                "Horizon (bars)": run["horizon"],
+                "Model": run["selected_model"],
+                "Forecast": run["forecast_price"],
+                "Return (%)": run["return_forecast_pct"],
+                "Holdout MAE": run["metrics"]["selected"]["mae"],
+            } for run in runs]
+            st.dataframe(pd.DataFrame(history_rows), hide_index=True, use_container_width=True)
+            st.caption("Saved forecasts and their historical holdout scores. Future realized outcomes are not yet joined to these runs.")
+        else:
+            st.caption("No saved runs for this symbol yet.")
 else:
     st.info("Choose a ticker and analysis settings, then run an analysis.")

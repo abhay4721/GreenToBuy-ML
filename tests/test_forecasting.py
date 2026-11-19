@@ -1,5 +1,6 @@
 import unittest
 import json
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -7,6 +8,7 @@ from fastapi import HTTPException
 
 from forecasting import build_features, forecast
 from market_data import market_profile, normalize_symbol, validate_market_data, yahoo_ticker
+from local_analysis import analyze_symbol
 from quant_analysis import analyze_market
 from server import get_stock_analysis, health
 
@@ -69,6 +71,17 @@ class DataPipelineTests(unittest.TestCase):
         self.assertIn("rule-based", diagnostics["regime_method"])
         self.assertGreaterEqual(risk["ewma_volatility_pct_per_bar"], 0)
         json.dumps({"diagnostics": diagnostics, "risk": risk}, allow_nan=False)
+
+    def test_streamlit_analysis_path_fetches_online_data_directly(self):
+        data = sample_data(650)
+        with patch("local_analysis.get_stock_data", return_value=data) as fetch, \
+             patch("local_analysis.record_experiment", return_value="run-local"):
+            result = analyze_symbol("AAPL", "daily", 1, "ridge")
+        fetch.assert_called_once_with("AAPL", "daily", force_refresh=True)
+        self.assertEqual(result["data_source"], "Yahoo Finance through yfinance")
+        self.assertEqual(result["experiment_id"], "run-local")
+        self.assertIn("forecast", result)
+        self.assertIn("chart_data", result)
 
     def test_forecast_metrics_and_horizons(self):
         data = sample_data(650)

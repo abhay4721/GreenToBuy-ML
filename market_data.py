@@ -105,14 +105,14 @@ def _write_cache(symbol: str, interval: str, data: pd.DataFrame) -> None:
         conn.commit()
 
 
-def get_stock_data(symbol: str, interval: str = "daily") -> pd.DataFrame:
+def get_stock_data(symbol: str, interval: str = "daily", force_refresh: bool = False) -> pd.DataFrame:
     symbol = normalize_symbol(symbol)
     if interval not in INTERVALS:
         raise ValueError(f"Unsupported interval: {interval}")
     period, yf_interval, max_age = INTERVALS[interval]
     cached = _read_cache(symbol, interval)
     now = datetime.now(timezone.utc)
-    if not cached.empty and now - cached.index[-1].to_pydatetime() < max_age:
+    if not force_refresh and not cached.empty and now - cached.index[-1].to_pydatetime() < max_age:
         return cached
 
     last_error: Exception | None = None
