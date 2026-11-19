@@ -52,7 +52,7 @@ chmod +x run_linux.sh   # only needed once
 ./run_linux.sh
 ```
 
-Open <http://localhost:8501>. The launcher starts Uvicorn at `http://127.0.0.1:8000` and Streamlit at `http://127.0.0.1:8501`; pressing Ctrl+C stops both. Set `BACKEND_PORT` or `FRONTEND_PORT` to change ports, and set `BACKEND_HOST` or `FRONTEND_HOST` to change bind addresses. The Streamlit dashboard retrieves market history from Yahoo Finance directly; its analysis does not call the local backend.
+Open the frontend URL printed by the launcher. It prefers backend port `8000` and frontend port `8501`, then scans through `8010` and `8511` if those are occupied. Set `BACKEND_PORT` or `FRONTEND_PORT` to require a specific port, and set `BACKEND_HOST` or `FRONTEND_HOST` to change bind addresses. Pressing Ctrl+C stops both services. The Streamlit dashboard retrieves market history from Yahoo Finance directly; its analysis does not call the local backend.
 
 To run only the dashboard, use `streamlit run app.py`. The local API server remains useful for other clients and is started by `run_linux.sh` as requested.
 
