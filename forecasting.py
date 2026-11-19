@@ -162,6 +162,40 @@ def _fit_recent(estimator, x: pd.DataFrame, y: np.ndarray):
     return estimator
 
 
+def _project_simplex(values: np.ndarray) -> np.ndarray:
+    """Project weights onto the non-negative, sum-to-one simplex."""
+    ordered = np.sort(values)[::-1]
+    cumulative = np.cumsum(ordered)
+    valid = np.flatnonzero(ordered * np.arange(1, len(values) + 1) > cumulative - 1)
+    threshold = (cumulative[valid[-1]] - 1) / (valid[-1] + 1) if len(valid) else 0.0
+    return np.maximum(values - threshold, 0.0)
+
+
+def _stack_weights(predictions: np.ndarray, actual: np.ndarray) -> np.ndarray:
+    """Fit regularized non-negative blend weights on chronological OOF returns."""
+    if predictions.ndim != 2 or predictions.shape[0] != len(actual):
+        raise ValueError("Out-of-fold predictions must align with actual returns.")
+    model_count = predictions.shape[1]
+    uniform = np.full(model_count, 1 / model_count)
+    scale = max(float(np.sqrt(np.mean(np.square(actual)))), 1e-8)
+    matrix = predictions / scale
+    target = actual / scale
+    gram = matrix.T @ matrix / len(target)
+    cross = matrix.T @ target / len(target)
+    regularization = 0.1
+    largest_eigenvalue = float(np.linalg.eigvalsh(gram)[-1])
+    step = 1 / max(2 * (largest_eigenvalue + regularization), 1e-8)
+    weights = uniform.copy()
+    for _ in range(1_000):
+        gradient = 2 * (gram @ weights - cross + regularization * (weights - uniform))
+        updated = _project_simplex(weights - step * gradient)
+        if np.max(np.abs(updated - weights)) < 1e-10:
+            weights = updated
+            break
+        weights = updated
+    return weights
+
+
 def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", market_profile: str = "global_equity") -> ForecastResult:
     if horizon not in (1, 3, 5, 10, 20, 30):
         raise ValueError("Horizon must be 1, 3, 5, 10, 20, or 30 trading bars.")
@@ -245,10 +279,11 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
 
     # Blend weights use only the earlier model-selection folds. The final holdout
     # measures the blend after those weights have been fixed.
-    raw_weights = {family: 1 / max(selection_mae[label], 1e-9) for family, (label, _) in best_by_family.items()}
-    weight_total = sum(raw_weights.values())
-    weights = {family: weight / weight_total for family, weight in raw_weights.items()}
-    ensemble_oof = sum(np.asarray(candidate_oof[label]) * weights[family] for family, (label, _) in best_by_family.items())
+    model_families = list(best_by_family)
+    oof_matrix = np.column_stack([candidate_oof[best_by_family[family][0]] for family in model_families])
+    fitted_weights = _stack_weights(oof_matrix, np.asarray(selection_actual))
+    weights = dict(zip(model_families, fitted_weights.tolist()))
+    ensemble_oof = oof_matrix @ fitted_weights
     ensemble_selection_mae = float(mean_absolute_error(selection_actual, ensemble_oof))
     naive_selection_mae = float(mean_absolute_error(selection_actual, np.zeros(len(selection_actual))))
     ensemble_return = sum(
@@ -277,12 +312,8 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
             row["selection_mae"] = 100 * selection_mae[best_by_family[family][0]]
         comparison[family] = row
     naive = _metrics(holdout_y, holdout_previous, holdout_previous)
-    if market_profile == "forex" and model_choice.lower() == "auto":
+    if model_choice.lower() == "auto":
         selected_family = "Weighted Ensemble" if ensemble_selection_mae < naive_selection_mae * (1 - MIN_SELECTION_EDGE) else "Naïve: unchanged close"
-    elif model_choice.lower() == "auto":
-        selected_family = min(best_by_family, key=lambda name: selection_mae[best_by_family[name][0]])
-        if selection_mae[best_by_family[selected_family][0]] >= naive_selection_mae * (1 - MIN_SELECTION_EDGE):
-            selected_family = "Naïve: unchanged close"
     selected_holdout = holdout_predictions[selected_family]
     metrics = comparison[selected_family]
     if selected_family == "Weighted Ensemble":
@@ -350,7 +381,7 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
         metrics=metrics,
         naive_metrics=naive,
         model_comparison=comparison,
-        ensemble_weights=weights if selected_family == "Weighted Ensemble" or (market_profile == "forex" and model_choice.lower() == "auto") else {},
+        ensemble_weights=weights if selected_family == "Weighted Ensemble" or model_choice.lower() == "auto" else {},
         diagnostics=diagnostics,
         risk=risk,
         uncertainty={

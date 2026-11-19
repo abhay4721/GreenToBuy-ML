@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from fastapi import HTTPException
 
-from forecasting import build_features, forecast
+from forecasting import _stack_weights, build_features, forecast
 from market_data import market_profile, normalize_symbol, validate_market_data, yahoo_ticker
 from local_analysis import analyze_symbol
 from quant_analysis import analyze_market
@@ -72,6 +72,15 @@ class DataPipelineTests(unittest.TestCase):
         self.assertGreaterEqual(risk["ewma_volatility_pct_per_bar"], 0)
         json.dumps({"diagnostics": diagnostics, "risk": risk}, allow_nan=False)
 
+    def test_stacker_weights_are_nonnegative_and_sum_to_one(self):
+        rng = np.random.default_rng(8)
+        actual = rng.normal(size=120)
+        predictions = np.column_stack((actual + rng.normal(0, 0.1, 120), rng.normal(size=120), -actual))
+        weights = _stack_weights(predictions, actual)
+        self.assertTrue((weights >= 0).all())
+        self.assertAlmostEqual(float(weights.sum()), 1.0)
+        self.assertGreater(weights[0], weights[1])
+
     def test_streamlit_analysis_path_fetches_online_data_directly(self):
         data = sample_data(650)
         with patch("local_analysis.get_stock_data", return_value=data) as fetch, \
@@ -122,6 +131,8 @@ class DataPipelineTests(unittest.TestCase):
         self.assertEqual(result.market_profile, "india")
         self.assertIn("Hist Gradient Boosting", result.model_comparison)
         self.assertGreater(result.validation_points, 0)
+        self.assertIn(result.model, ("Weighted Ensemble", "Naïve: unchanged close"))
+        self.assertEqual(len(result.ensemble_weights), 5)
 
     def test_empty_or_short_history_fails_clearly(self):
         with self.assertRaisesRegex(ValueError, "250"):

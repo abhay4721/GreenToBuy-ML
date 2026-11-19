@@ -71,8 +71,8 @@ with st.sidebar:
     horizon_unit = "trading day" if interval == "daily" else "bar"
     horizon = st.selectbox("Forecast horizon", [1, 3, 5, 10, 20, 30], format_func=lambda x: f"{x} {horizon_unit if x == 1 else horizon_unit + 's'}")
     model_labels = {
-        "auto": "Best model by time-series CV",
-        "weighted ensemble": "Validation-weighted ensemble",
+        "auto": "All-family stacked model (validated)",
+        "weighted ensemble": "Stacked ensemble",
         "ridge": "Ridge regression",
         "random forest": "Random forest",
         "extra trees": "Extra Trees",
@@ -165,9 +165,9 @@ if analyze:
     metrics[3].metric("Holdout MAE", f"{forecast['metrics']['mae']:,.2f}")
     st.caption(f"Source: {result['data_source']} · Market profile: {result['market_profile']} · Latest bar: {result['latest_price']['timestamp']} · Analysis updated: {result['updated_at']}")
     if result["market_profile"] == "forex" and model == "auto":
-        st.caption("Forex auto mode evaluates a weighted blend and uses it only when it clears the baseline hurdle.")
+        st.caption("Forex auto mode stacks the supported model families and uses the blend only when it clears the baseline hurdle.")
     elif result["market_profile"] == "india":
-        st.caption("India profile compares the general model set with regularized trend-boosting variants using earlier validation folds.")
+        st.caption("India auto mode includes its regularized trend-boosting candidate in the validation-fitted stack.")
 
     chart = pd.DataFrame(result["chart_data"])
     chart["x"] = pd.to_datetime(chart["x"], utc=True)
@@ -196,7 +196,7 @@ if analyze:
         elif forecast["metrics"]["mae"] >= forecast["naive_metrics"]["mae"]:
             st.info("The selected model did not beat the unchanged-close benchmark on the chronological holdout MAE.")
         if forecast["ensemble_weights"]:
-            st.caption("Forex validation blend weights: " + ", ".join(f"{name} {weight:.0%}" for name, weight in forecast["ensemble_weights"].items()))
+            st.caption("Out-of-fold ensemble weights: " + ", ".join(f"{name} {weight:.0%}" for name, weight in forecast["ensemble_weights"].items()))
         st.caption(f"Selection-residual probability of positive return: {forecast['probability_positive']:.1f}% · Selection interval coverage on holdout: {forecast['uncertainty']['intervals']['90']['holdout_coverage_pct']:.1f}%")
     with right:
         st.subheader("Latest indicators")
