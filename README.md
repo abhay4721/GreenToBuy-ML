@@ -45,13 +45,16 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install -r requirements.txt
 ```
 
-Start the dashboard directly:
+Start the backend and frontend together on Linux:
 
 ```bash
-streamlit run app.py
+chmod +x run_linux.sh   # only needed once
+./run_linux.sh
 ```
 
-Open <http://localhost:8501>. The dashboard retrieves market history from Yahoo Finance directly. No local FastAPI process, `.env` configuration, Twelve Data key, or broker credentials are required. An optional FastAPI service remains available for clients that need HTTP endpoints, but the Streamlit dashboard does not call it.
+Open <http://localhost:8501>. The launcher starts Uvicorn at `http://127.0.0.1:8000` and Streamlit at `http://127.0.0.1:8501`; pressing Ctrl+C stops both. Set `BACKEND_PORT` or `FRONTEND_PORT` to change ports, and set `BACKEND_HOST` or `FRONTEND_HOST` to change bind addresses. The Streamlit dashboard retrieves market history from Yahoo Finance directly; its analysis does not call the local backend.
+
+To run only the dashboard, use `streamlit run app.py`. The local API server remains useful for other clients and is started by `run_linux.sh` as requested.
 
 The quote panel supports **paper orders only**. It uses the latest Yahoo Finance five-minute close as a simulated fill and rejects bars older than 60 seconds; Yahoo may delay or omit intraday data, so paper orders may be unavailable. Positions and orders remain local in `paper_trading.db`; no broker order is sent.
 
