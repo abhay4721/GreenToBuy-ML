@@ -34,7 +34,7 @@ def get_stock_analysis(
     symbol: str,
     interval: str = Query("daily", description="One of 5min, 15min, 60min, daily"),
     horizon: int = Query(1, description="Trading bars ahead: 1, 5, 10, or 30"),
-    model: str = Query("auto", description="auto, ridge, or random forest"),
+    model: str = Query("auto", description="auto, weighted ensemble, ridge, random forest, extra trees, hist gradient boosting, or svr"),
 ) -> dict:
     try:
         ticker = normalize_symbol(symbol)
@@ -42,8 +42,8 @@ def get_stock_analysis(
             raise HTTPException(status_code=422, detail=f"Interval must be one of: {', '.join(INTERVALS)}")
         if horizon not in (1, 5, 10, 30):
             raise HTTPException(status_code=422, detail="Horizon must be 1, 5, 10, or 30 trading bars.")
-        if model.lower() not in ("auto", "ridge", "random forest"):
-            raise HTTPException(status_code=422, detail="Model must be auto, ridge, or random forest.")
+        if model.lower() not in ("auto", "weighted ensemble", "ridge", "random forest", "extra trees", "hist gradient boosting", "svr"):
+            raise HTTPException(status_code=422, detail="Choose auto, weighted ensemble, ridge, random forest, extra trees, hist gradient boosting, or svr.")
         data = get_stock_data(ticker, interval)
         result = forecast(data, horizon=horizon, model_choice=model)
     except HTTPException:

@@ -9,8 +9,9 @@ Forecasts are estimates from historical data. They do not account for future new
 - Daily and intraday OHLCV history with a local SQLite cache.
 - Data validation for missing prices, duplicate timestamps, and invalid symbols.
 - Moving averages, EMA, RSI, MACD, Bollinger bands, ATR, ADX, OBV, returns, volatility, momentum, and lag features.
-- Ridge regression and Random Forest comparison, with automatic selection by walk-forward MAE.
-- Purged chronological validation, error metrics, directional accuracy, and an unchanged-close benchmark.
+- Ridge, Random Forest, Extra Trees, histogram gradient boosting, and support vector regression, with small validation-based parameter searches.
+- Automatic model selection, plus a weighted ensemble whose weights come from earlier validation folds.
+- Purged chronological model-selection folds and a separate final holdout, with error metrics, directional accuracy, and an unchanged-close benchmark.
 - A Streamlit dashboard with candlesticks, forecast range, latest indicators, and validation results.
 
 ## Architecture
@@ -50,15 +51,15 @@ Open <http://localhost:8501>. The dashboard expects the API at `http://127.0.0.1
 
 ## Forecasting and evaluation
 
-The API accepts `interval` (`daily`, `60min`, `15min`, or `5min`), `horizon` (1, 5, 10, or 30 trading bars), and `model` (`auto`, `ridge`, or `random forest`) parameters. For example:
+The dashboard ticker picker searches a curated list of equities, ETFs, and supported forex aliases. A separate field accepts other Yahoo Finance symbols. The API accepts `interval` (`daily`, `60min`, `15min`, or `5min`), `horizon` (1, 5, 10, or 30 trading bars), and `model` (`auto`, `weighted ensemble`, `ridge`, `random forest`, `extra trees`, `hist gradient boosting`, or `svr`). For example:
 
 ```text
 /api/stock/AAPL?interval=daily&horizon=5&model=auto
 ```
 
-Each feature row uses its bar and earlier observations. The target is the closing price at the requested horizon. Walk-forward test folds are chronological and include a gap equal to the forecast horizon, so training labels do not overlap validation periods. Automatic selection chooses the model with lower validation MAE. Results include MAE, RMSE, MAPE, R², directional accuracy, and an unchanged-close benchmark. A 90th percentile absolute validation error range is shown as an error range; it is not a calibrated probability interval.
+Each feature row uses its bar and earlier observations. The target is the closing price at the requested horizon. Expanding-window selection folds are chronological and include a gap equal to the forecast horizon, so training labels do not overlap validation periods. Model family and parameter selection use only those earlier folds; displayed performance uses a later, separate holdout. Automatic selection chooses the family with lower selection-fold MAE. Ensemble weights are calculated from those selection folds, then the ensemble is scored on the separate holdout. Results include MAE, RMSE, MAPE, R², directional accuracy, and an unchanged-close benchmark. A 90th percentile absolute holdout error range is shown; it is not a calibrated probability interval.
 
-The model comparison is limited to Ridge regression and Random Forest. There is no claim that either model beats the benchmark or will be profitable. The forecasting code requires enough history for the 200-bar feature and validation folds; short history returns a clear error.
+No model is assumed to be best, and there is no claim that these forecasts beat the benchmark or will be profitable. The forecasting code requires enough history for the 200-bar feature, selection folds, and separate holdout; short history returns a clear error.
 
 ## Tests
 

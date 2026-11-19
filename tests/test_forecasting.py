@@ -68,6 +68,17 @@ class DataPipelineTests(unittest.TestCase):
                 self.assertIn("mae", result.metrics)
                 self.assertIn("directional_accuracy", result.naive_metrics)
                 self.assertLessEqual(result.uncertainty["lower"], result.uncertainty["upper"])
+                self.assertEqual(
+                    set(result.model_comparison),
+                    {"Ridge", "Random Forest", "Extra Trees", "Hist Gradient Boosting", "SVR", "Weighted Ensemble"},
+                )
+                self.assertEqual(result.validation_points, 60)
+
+    def test_weighted_ensemble_uses_validation_weights(self):
+        result = forecast(sample_data(650), horizon=5, model_choice="weighted ensemble")
+        self.assertEqual(result.model, "Weighted Ensemble")
+        self.assertAlmostEqual(sum(result.ensemble_weights.values()), 1.0)
+        self.assertGreater(len(result.ensemble_weights), 1)
 
     def test_empty_or_short_history_fails_clearly(self):
         with self.assertRaisesRegex(ValueError, "250"):

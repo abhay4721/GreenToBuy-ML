@@ -11,6 +11,22 @@ import streamlit as st
 
 st.set_page_config(page_title="GreenToBuy | Market Analytics", page_icon="📈", layout="wide")
 API_URL = os.getenv("GREENTOBUY_API_URL", "http://127.0.0.1:8000")
+TICKERS = {
+    "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "NVIDIA", "AMZN": "Amazon", "GOOGL": "Alphabet",
+    "META": "Meta Platforms", "TSLA": "Tesla", "AVGO": "Broadcom", "BRK-B": "Berkshire Hathaway",
+    "JPM": "JPMorgan Chase", "LLY": "Eli Lilly", "V": "Visa", "XOM": "Exxon Mobil", "MA": "Mastercard",
+    "COST": "Costco", "WMT": "Walmart", "ORCL": "Oracle", "NFLX": "Netflix", "AMD": "AMD",
+    "CRM": "Salesforce", "QCOM": "Qualcomm", "ADBE": "Adobe", "INTC": "Intel", "CSCO": "Cisco",
+    "IBM": "IBM", "GE": "GE Aerospace", "CAT": "Caterpillar", "BA": "Boeing", "DIS": "Walt Disney",
+    "KO": "Coca-Cola", "PEP": "PepsiCo", "NKE": "Nike", "MCD": "McDonald's", "UBER": "Uber",
+    "PLTR": "Palantir", "COIN": "Coinbase", "SHOP": "Shopify", "PYPL": "PayPal", "BABA": "Alibaba",
+    "TSM": "Taiwan Semiconductor", "SONY": "Sony", "SPY": "SPDR S&P 500 ETF", "QQQ": "Invesco QQQ ETF",
+    "DIA": "SPDR Dow Jones ETF", "IWM": "iShares Russell 2000 ETF", "VTI": "Vanguard Total Market ETF",
+    "VOO": "Vanguard S&P 500 ETF", "GLD": "SPDR Gold Shares", "SLV": "iShares Silver Trust",
+    "TLT": "iShares 20+ Year Treasury ETF", "XLF": "Financial Select Sector ETF",
+    "XLE": "Energy Select Sector ETF", "XAUUSD": "Gold / US Dollar", "EURUSD": "Euro / US Dollar",
+    "GBPUSD": "British Pound / US Dollar",
+}
 
 st.markdown("""
 <style>
@@ -26,10 +42,28 @@ st.caption("Historical market analysis and out-of-sample evaluated forecasts")
 
 with st.sidebar:
     st.subheader("Analysis")
-    symbol = st.text_input("Ticker", value="AAPL", max_chars=20).strip().upper()
+    ticker_options = list(TICKERS)
+    selected_ticker = st.selectbox(
+        "Search ticker",
+        ticker_options,
+        index=ticker_options.index("AAPL"),
+        format_func=lambda ticker: f"{ticker}  ·  {TICKERS[ticker]}",
+        help="Type a symbol or company name to filter the list.",
+    )
+    custom_ticker = st.text_input("Or enter another ticker", placeholder="e.g. MSFT, BRK-B, XAUUSD", max_chars=20).strip().upper()
+    symbol = custom_ticker or selected_ticker
     interval = st.selectbox("Market interval", ["daily", "60min", "15min", "5min"])
     horizon = st.selectbox("Forecast horizon", [1, 5, 10, 30], format_func=lambda x: f"{x} trading {'day' if x == 1 else 'days'}")
-    model = st.selectbox("Model selection", ["auto", "ridge", "random forest"], format_func=lambda x: {"auto": "Choose by validation MAE", "ridge": "Ridge regression", "random forest": "Random forest"}[x])
+    model_labels = {
+        "auto": "Best model by time-series CV",
+        "weighted ensemble": "Validation-weighted ensemble",
+        "ridge": "Ridge regression",
+        "random forest": "Random forest",
+        "extra trees": "Extra Trees",
+        "hist gradient boosting": "Histogram gradient boosting",
+        "svr": "Support vector regression",
+    }
+    model = st.selectbox("Model selection", list(model_labels), format_func=lambda value: model_labels[value])
     analyze = st.button("Run analysis", type="primary", use_container_width=True)
     st.caption("Forecasts are statistical estimates, not guaranteed future prices.")
 
@@ -59,7 +93,7 @@ if analyze:
     metrics[0].metric("Reference close", f"{current:,.2f}")
     metrics[1].metric(f"{horizon}-bar forecast", f"{forecast['forecast']:,.2f}", f"{expected:+.2f}%")
     metrics[2].metric("Model", forecast["model"])
-    metrics[3].metric("Walk-forward MAE", f"{forecast['metrics']['mae']:,.2f}")
+    metrics[3].metric("Holdout MAE", f"{forecast['metrics']['mae']:,.2f}")
     st.caption(f"Reference data: {result['latest_price']['timestamp']} · Analysis updated: {result['updated_at']}")
 
     chart = pd.DataFrame(result["chart_data"])
@@ -78,14 +112,18 @@ if analyze:
 
     left, right = st.columns([1.2, 1])
     with left:
-        st.subheader("Walk-forward performance")
-        st.caption(f"{forecast['validation_points']} out-of-sample predictions · evaluated through {forecast['validation_end']}")
+        st.subheader("Model comparison")
+        st.caption(f"{forecast['validation_points']} untouched chronological holdout predictions · evaluated through {forecast['validation_end']}")
         score_rows = []
-        for name, values in ((forecast["model"], forecast["metrics"]), ("Naïve: unchanged close", forecast["naive_metrics"])):
-            score_rows.append({"Method": name, "MAE": values["mae"], "RMSE": values["rmse"], "MAPE (%)": values["mape"], "R²": values["r2"], "Direction (%)": values["directional_accuracy"]})
-        st.dataframe(pd.DataFrame(score_rows).set_index("Method").style.format("{:.3f}"), use_container_width=True)
+        for name, values in forecast["model_comparison"].items():
+            score_rows.append({"Method": name, "CV MAE": f"{values['selection_mae']:.3f}", "Holdout MAE": f"{values['mae']:.3f}", "RMSE": f"{values['rmse']:.3f}", "MAPE (%)": f"{values['mape']:.3f}", "R²": f"{values['r2']:.3f}", "Direction (%)": f"{values['directional_accuracy']:.1f}"})
+        values = forecast["naive_metrics"]
+        score_rows.append({"Method": "Naïve: unchanged close", "CV MAE": "—", "Holdout MAE": f"{values['mae']:.3f}", "RMSE": f"{values['rmse']:.3f}", "MAPE (%)": f"{values['mape']:.3f}", "R²": f"{values['r2']:.3f}", "Direction (%)": f"{values['directional_accuracy']:.1f}"})
+        st.dataframe(pd.DataFrame(score_rows).set_index("Method"), use_container_width=True)
         if forecast["metrics"]["mae"] >= forecast["naive_metrics"]["mae"]:
-            st.info("The selected model did not beat the unchanged-close benchmark on walk-forward MAE.")
+            st.info("The selected model did not beat the unchanged-close benchmark on the chronological holdout MAE.")
+        if forecast["ensemble_weights"]:
+            st.caption("Ensemble weights set from earlier validation folds: " + ", ".join(f"{name} {weight:.0%}" for name, weight in forecast["ensemble_weights"].items()))
     with right:
         st.subheader("Latest indicators")
         indicators = result["indicators"]
