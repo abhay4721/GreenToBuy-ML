@@ -26,6 +26,19 @@ TICKERS = {
     "TLT": "iShares 20+ Year Treasury ETF", "XLF": "Financial Select Sector ETF",
     "XLE": "Energy Select Sector ETF", "XAUUSD": "Gold / US Dollar", "EURUSD": "Euro / US Dollar",
     "GBPUSD": "British Pound / US Dollar",
+    "RELIANCE.NS": "Reliance Industries · NSE", "TCS.NS": "Tata Consultancy Services · NSE",
+    "HDFCBANK.NS": "HDFC Bank · NSE", "ICICIBANK.NS": "ICICI Bank · NSE", "INFY.NS": "Infosys · NSE",
+    "SBIN.NS": "State Bank of India · NSE", "BHARTIARTL.NS": "Bharti Airtel · NSE",
+    "ITC.NS": "ITC Limited · NSE", "LT.NS": "Larsen & Toubro · NSE", "HINDUNILVR.NS": "Hindustan Unilever · NSE",
+    "AXISBANK.NS": "Axis Bank · NSE", "KOTAKBANK.NS": "Kotak Mahindra Bank · NSE",
+    "MARUTI.NS": "Maruti Suzuki · NSE", "TATAMOTORS.NS": "Tata Motors · NSE",
+    "TATASTEEL.NS": "Tata Steel · NSE", "SUNPHARMA.NS": "Sun Pharmaceutical · NSE",
+    "BAJFINANCE.NS": "Bajaj Finance · NSE", "ASIANPAINT.NS": "Asian Paints · NSE",
+    "TITAN.NS": "Titan Company · NSE", "ADANIENT.NS": "Adani Enterprises · NSE",
+    "NTPC.NS": "NTPC · NSE", "POWERGRID.NS": "Power Grid · NSE", "ONGC.NS": "ONGC · NSE",
+    "WIPRO.NS": "Wipro · NSE", "HCLTECH.NS": "HCL Technologies · NSE",
+    "ULTRACEMCO.NS": "UltraTech Cement · NSE", "^NSEI": "NIFTY 50 Index",
+    "^NSEBANK": "NIFTY Bank Index", "^BSESN": "BSE SENSEX Index",
 }
 
 st.markdown("""
@@ -53,7 +66,8 @@ with st.sidebar:
     custom_ticker = st.text_input("Or enter another ticker", placeholder="e.g. MSFT, BRK-B, XAUUSD", max_chars=20).strip().upper()
     symbol = custom_ticker or selected_ticker
     interval = st.selectbox("Market interval", ["daily", "60min", "15min", "5min"])
-    horizon = st.selectbox("Forecast horizon", [1, 5, 10, 30], format_func=lambda x: f"{x} trading {'day' if x == 1 else 'days'}")
+    horizon_unit = "trading day" if interval == "daily" else "bar"
+    horizon = st.selectbox("Forecast horizon", [1, 5, 10, 30], format_func=lambda x: f"{x} {horizon_unit if x == 1 else horizon_unit + 's'}")
     model_labels = {
         "auto": "Best model by time-series CV",
         "weighted ensemble": "Validation-weighted ensemble",
@@ -61,7 +75,7 @@ with st.sidebar:
         "random forest": "Random forest",
         "extra trees": "Extra Trees",
         "hist gradient boosting": "Histogram gradient boosting",
-        "svr": "Support vector regression",
+        "svr": "RBF support vector regression (approx.)",
     }
     model = st.selectbox("Model selection", list(model_labels), format_func=lambda value: model_labels[value])
     analyze = st.button("Run analysis", type="primary", use_container_width=True)
@@ -94,7 +108,11 @@ if analyze:
     metrics[1].metric(f"{horizon}-bar forecast", f"{forecast['forecast']:,.2f}", f"{expected:+.2f}%")
     metrics[2].metric("Model", forecast["model"])
     metrics[3].metric("Holdout MAE", f"{forecast['metrics']['mae']:,.2f}")
-    st.caption(f"Reference data: {result['latest_price']['timestamp']} · Analysis updated: {result['updated_at']}")
+    st.caption(f"Market profile: {result['market_profile']} · Reference data: {result['latest_price']['timestamp']} · Analysis updated: {result['updated_at']}")
+    if result["market_profile"] == "forex" and model == "auto":
+        st.caption("Forex auto mode evaluates a weighted blend and uses it only when it clears the baseline hurdle.")
+    elif result["market_profile"] == "india":
+        st.caption("India profile compares the general model set with regularized trend-boosting variants using earlier validation folds.")
 
     chart = pd.DataFrame(result["chart_data"])
     chart["x"] = pd.to_datetime(chart["x"], utc=True)
@@ -116,14 +134,14 @@ if analyze:
         st.caption(f"{forecast['validation_points']} untouched chronological holdout predictions · evaluated through {forecast['validation_end']}")
         score_rows = []
         for name, values in forecast["model_comparison"].items():
-            score_rows.append({"Method": name, "CV MAE": f"{values['selection_mae']:.3f}", "Holdout MAE": f"{values['mae']:.3f}", "RMSE": f"{values['rmse']:.3f}", "MAPE (%)": f"{values['mape']:.3f}", "R²": f"{values['r2']:.3f}", "Direction (%)": f"{values['directional_accuracy']:.1f}"})
-        values = forecast["naive_metrics"]
-        score_rows.append({"Method": "Naïve: unchanged close", "CV MAE": "—", "Holdout MAE": f"{values['mae']:.3f}", "RMSE": f"{values['rmse']:.3f}", "MAPE (%)": f"{values['mape']:.3f}", "R²": f"{values['r2']:.3f}", "Direction (%)": f"{values['directional_accuracy']:.1f}"})
+            score_rows.append({"Method": name, "Selection MAE (% return)": f"{values['selection_mae']:.3f}", "Holdout MAE": f"{values['mae']:.3f}", "RMSE": f"{values['rmse']:.3f}", "MAPE (%)": f"{values['mape']:.3f}", "R²": f"{values['r2']:.3f}", "Direction (%)": f"{values['directional_accuracy']:.1f}"})
         st.dataframe(pd.DataFrame(score_rows).set_index("Method"), use_container_width=True)
-        if forecast["metrics"]["mae"] >= forecast["naive_metrics"]["mae"]:
+        if forecast["model"] == "Naïve: unchanged close":
+            st.info("No candidate cleared the 5% selection-fold improvement hurdle over the unchanged-close benchmark, so the forecast uses that baseline.")
+        elif forecast["metrics"]["mae"] >= forecast["naive_metrics"]["mae"]:
             st.info("The selected model did not beat the unchanged-close benchmark on the chronological holdout MAE.")
         if forecast["ensemble_weights"]:
-            st.caption("Ensemble weights set from earlier validation folds: " + ", ".join(f"{name} {weight:.0%}" for name, weight in forecast["ensemble_weights"].items()))
+            st.caption("Forex validation blend weights: " + ", ".join(f"{name} {weight:.0%}" for name, weight in forecast["ensemble_weights"].items()))
     with right:
         st.subheader("Latest indicators")
         indicators = result["indicators"]

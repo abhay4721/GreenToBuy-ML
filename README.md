@@ -1,6 +1,6 @@
 # GreenToBuy
 
-GreenToBuy is a small market analysis application built with FastAPI and Streamlit. It loads Yahoo Finance OHLCV history, calculates technical features, compares two regression models with chronological validation, and displays a direct forecast for a selected horizon.
+GreenToBuy is a market analysis application built with FastAPI and Streamlit. It loads Yahoo Finance OHLCV history, calculates technical features, compares regression and tree models with chronological validation, and displays a direct forecast for a selected horizon.
 
 Forecasts are estimates from historical data. They do not account for future news, corporate actions beyond the source data, or changing market conditions, and are not investment advice.
 
@@ -13,6 +13,8 @@ Forecasts are estimates from historical data. They do not account for future new
 - Automatic model selection, plus a weighted ensemble whose weights come from earlier validation folds.
 - Purged chronological model-selection folds and a separate final holdout, with error metrics, directional accuracy, and an unchanged-close benchmark.
 - A Streamlit dashboard with candlesticks, forecast range, latest indicators, and validation results.
+- Curated Indian listings and NIFTY 50, NIFTY Bank, and SENSEX indices through Yahoo Finance symbols.
+- India-profile trend and volume feature tuning; forex auto mode evaluates a validation-weighted model blend with a baseline guard.
 
 ## Architecture
 
@@ -51,13 +53,13 @@ Open <http://localhost:8501>. The dashboard expects the API at `http://127.0.0.1
 
 ## Forecasting and evaluation
 
-The dashboard ticker picker searches a curated list of equities, ETFs, and supported forex aliases. A separate field accepts other Yahoo Finance symbols. The API accepts `interval` (`daily`, `60min`, `15min`, or `5min`), `horizon` (1, 5, 10, or 30 trading bars), and `model` (`auto`, `weighted ensemble`, `ridge`, `random forest`, `extra trees`, `hist gradient boosting`, or `svr`). For example:
+The dashboard ticker picker searches a curated list of US equities, ETFs, Indian equities, Indian indices, and supported forex aliases. Indian listings use Yahoo Finance `.NS`/`.BO` symbols; a separate field accepts other Yahoo Finance symbols. The API accepts `interval` (`daily`, `60min`, `15min`, or `5min`), `horizon` (1, 5, 10, or 30 trading bars), and `model` (`auto`, `weighted ensemble`, `ridge`, `random forest`, `extra trees`, `hist gradient boosting`, or `svr`). For example:
 
 ```text
 /api/stock/AAPL?interval=daily&horizon=5&model=auto
 ```
 
-Each feature row uses its bar and earlier observations. The target is the closing price at the requested horizon. Expanding-window selection folds are chronological and include a gap equal to the forecast horizon, so training labels do not overlap validation periods. Model family and parameter selection use only those earlier folds; displayed performance uses a later, separate holdout. Automatic selection chooses the family with lower selection-fold MAE. Ensemble weights are calculated from those selection folds, then the ensemble is scored on the separate holdout. Results include MAE, RMSE, MAPE, R², directional accuracy, and an unchanged-close benchmark. A 90th percentile absolute holdout error range is shown; it is not a calibrated probability interval.
+Models predict horizon returns from current and lagged price, volume, volatility, candle, and trend features, then convert the return estimate back to a price. India symbols also evaluate regularized trend-boosting variants. Forex symbols in auto mode evaluate a weighted blend of Ridge, Random Forest, Extra Trees, histogram gradient boosting, and approximate RBF SVR; blend weights are fixed from earlier folds. Auto mode uses a model only when selection folds show at least a 5% MAE improvement over the unchanged-close baseline; otherwise it returns that baseline. The kernel approximation and a 1,500-row rolling fit window keep computation bounded for longer intraday histories. Expanding-window selection folds are chronological and include a gap equal to the forecast horizon, so training labels do not overlap validation periods. Model family and parameter selection use only earlier folds; displayed performance uses a later, separate holdout. Results include MAE, RMSE, MAPE, R², directional accuracy, and an unchanged-close benchmark. A 90th percentile absolute holdout error range is shown; it is not a calibrated probability interval.
 
 No model is assumed to be best, and there is no claim that these forecasts beat the benchmark or will be profitable. The forecasting code requires enough history for the 200-bar feature, selection folds, and separate holdout; short history returns a clear error.
 
@@ -74,6 +76,7 @@ The tests use deterministic synthetic prices and do not call external data servi
 ## Limitations and next steps
 
 - Yahoo Finance is an unofficial data source and may throttle or change its response.
+- Indian exchange symbols and history are sourced from Yahoo Finance; coverage and intraday availability can vary by symbol.
 - Cached history may be returned if a refresh fails; the API timestamp identifies the last market bar.
 - Intraday horizons are expressed in bars and do not account for exchange holidays or market session boundaries.
 - The validation error range is descriptive and should not be interpreted as a confidence interval.

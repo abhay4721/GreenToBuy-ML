@@ -21,6 +21,8 @@ INTERVALS = {
 }
 REQUIRED_COLUMNS = ["open", "high", "low", "close", "volume"]
 YAHOO_TICKERS = {"XAUUSD": "GC=F", "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X"}
+INDIAN_INDEX_TICKERS = {"^NSEI", "^NSEBANK", "^BSESN"}
+FOREX_TICKERS = {"XAUUSD", "EURUSD", "GBPUSD"}
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -34,6 +36,16 @@ def yahoo_ticker(symbol: str) -> str:
     """Resolve the legacy precious metal and forex aliases supported by the UI."""
     ticker = normalize_symbol(symbol)
     return YAHOO_TICKERS.get(ticker, ticker)
+
+
+def market_profile(symbol: str) -> str:
+    """Classify supported symbols for market-specific model defaults."""
+    ticker = normalize_symbol(symbol)
+    if ticker in FOREX_TICKERS:
+        return "forex"
+    if ticker.endswith((".NS", ".BO")) or ticker in INDIAN_INDEX_TICKERS:
+        return "india"
+    return "global_equity"
 
 
 def validate_market_data(data: pd.DataFrame) -> pd.DataFrame:

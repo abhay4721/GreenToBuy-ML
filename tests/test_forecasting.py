@@ -5,7 +5,7 @@ import pandas as pd
 from fastapi import HTTPException
 
 from forecasting import build_features, forecast
-from market_data import normalize_symbol, validate_market_data, yahoo_ticker
+from market_data import market_profile, normalize_symbol, validate_market_data, yahoo_ticker
 from server import get_stock_analysis, health
 
 
@@ -36,6 +36,10 @@ class DataPipelineTests(unittest.TestCase):
     def test_symbol_normalization_and_rejection(self):
         self.assertEqual(normalize_symbol(" aapl "), "AAPL")
         self.assertEqual(yahoo_ticker("XAUUSD"), "GC=F")
+        self.assertEqual(yahoo_ticker("RELIANCE.NS"), "RELIANCE.NS")
+        self.assertEqual(market_profile("RELIANCE.NS"), "india")
+        self.assertEqual(market_profile("EURUSD"), "forex")
+        self.assertEqual(market_profile("MSFT"), "global_equity")
         with self.assertRaises(ValueError):
             normalize_symbol("bad ticker!")
 
@@ -70,15 +74,22 @@ class DataPipelineTests(unittest.TestCase):
                 self.assertLessEqual(result.uncertainty["lower"], result.uncertainty["upper"])
                 self.assertEqual(
                     set(result.model_comparison),
-                    {"Ridge", "Random Forest", "Extra Trees", "Hist Gradient Boosting", "SVR", "Weighted Ensemble"},
+                    {"Ridge", "Random Forest", "Extra Trees", "Hist Gradient Boosting", "SVR", "Weighted Ensemble", "Naïve: unchanged close"},
                 )
-                self.assertEqual(result.validation_points, 60)
+                self.assertEqual(result.validation_points, 40)
 
     def test_weighted_ensemble_uses_validation_weights(self):
-        result = forecast(sample_data(650), horizon=5, model_choice="weighted ensemble")
-        self.assertEqual(result.model, "Weighted Ensemble")
+        result = forecast(sample_data(650), horizon=5, model_choice="auto", market_profile="forex")
+        self.assertIn(result.model, ("Weighted Ensemble", "Naïve: unchanged close"))
+        self.assertEqual(result.market_profile, "forex")
         self.assertAlmostEqual(sum(result.ensemble_weights.values()), 1.0)
-        self.assertGreater(len(result.ensemble_weights), 1)
+        self.assertEqual(len(result.ensemble_weights), 5)
+
+    def test_indian_market_profile_includes_indian_trend_tuning(self):
+        result = forecast(sample_data(650), horizon=5, market_profile="india")
+        self.assertEqual(result.market_profile, "india")
+        self.assertIn("Hist Gradient Boosting", result.model_comparison)
+        self.assertGreater(result.validation_points, 0)
 
     def test_empty_or_short_history_fails_clearly(self):
         with self.assertRaisesRegex(ValueError, "250"):

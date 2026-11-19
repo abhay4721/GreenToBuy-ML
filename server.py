@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from forecasting import build_features, forecast
-from market_data import INTERVALS, get_stock_data, normalize_symbol
+from market_data import INTERVALS, get_stock_data, market_profile, normalize_symbol
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,7 +45,8 @@ def get_stock_analysis(
         if model.lower() not in ("auto", "weighted ensemble", "ridge", "random forest", "extra trees", "hist gradient boosting", "svr"):
             raise HTTPException(status_code=422, detail="Choose auto, weighted ensemble, ridge, random forest, extra trees, hist gradient boosting, or svr.")
         data = get_stock_data(ticker, interval)
-        result = forecast(data, horizon=horizon, model_choice=model)
+        profile = market_profile(ticker)
+        result = forecast(data, horizon=horizon, model_choice=model, market_profile=profile)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -61,6 +62,7 @@ def get_stock_analysis(
     rows = data.tail(250 if interval == "daily" else 300)
     return {
         "symbol": ticker,
+        "market_profile": result.market_profile,
         "interval": interval,
         "horizon": horizon,
         "updated_at": datetime.now(timezone.utc).isoformat(),
