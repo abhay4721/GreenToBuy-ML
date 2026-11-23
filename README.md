@@ -14,9 +14,10 @@ Forecasts are estimates from historical data. They do not account for future new
 - Purged chronological model-selection folds and a separate final holdout, with error metrics, directional accuracy, and an unchanged-close benchmark.
 - Six forecast horizons (1, 3, 5, 10, 20, and 30 bars), return-residual probability summaries, and 80/90/95% empirical intervals with separate holdout coverage reporting.
 - Causal return, drawdown, Hurst, trend-regime, EWMA, Parkinson, and Garman-Klass diagnostics with explicit assumptions.
+- Expanded snapshot statistics: 1/5/20/60/252-bar returns, distance from moving averages, positive-bar frequency, volume ratio, range position, historical VaR/CVaR, and downside deviation.
 - A local reproducibility ledger recording forecast settings, feature set, software versions, random seed, metrics, and recent run history.
 - Pointwise predictions from the final chronological holdout, plotted with actual prices and the unchanged-close baseline.
-- A Streamlit dashboard with candlesticks, forecast range, latest indicators, and validation results.
+- A redesigned Streamlit research workspace with Overview, Model lab, Risk & indicators, Saved research, and Paper trading tabs.
 - Curated Indian listings and NIFTY 50, NIFTY Bank, and SENSEX indices through Yahoo Finance symbols.
 - India-profile trend and volume feature tuning; its additional trend-boosting candidate participates in the same stack. Forex and other markets use the same family stack with weights fitted separately per series.
 - Optional Indian-market USD/INR macro features from Frankfurter's free historical reference-rate API, lagged one calendar day to reduce publication-time lookahead risk.

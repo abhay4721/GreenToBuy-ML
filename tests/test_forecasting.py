@@ -69,6 +69,10 @@ class DataPipelineTests(unittest.TestCase):
         data = sample_data(260)
         diagnostics, risk = analyze_market(data, 5)
         self.assertIn("rule-based", diagnostics["regime_method"])
+        self.assertIn("trailing_returns_pct", diagnostics)
+        self.assertIn("price_vs_moving_average_pct", diagnostics)
+        self.assertIn("historical_var_95_pct_per_bar", risk)
+        self.assertIn("downside_deviation_pct_per_bar", risk)
         self.assertGreaterEqual(risk["ewma_volatility_pct_per_bar"], 0)
         json.dumps({"diagnostics": diagnostics, "risk": risk}, allow_nan=False)
 

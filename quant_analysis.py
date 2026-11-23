@@ -60,6 +60,30 @@ def analyze_market(data: pd.DataFrame, horizon: int) -> tuple[dict, dict]:
     reference_price = float(close.iloc[-1])
     wealth = (1 + sample).cumprod()
     drawdown = wealth / wealth.cummax() - 1 if len(wealth) else pd.Series(dtype=float)
+    trailing_returns = {
+        str(period): _finite((close.iloc[-1] / close.iloc[-(period + 1)] - 1) * 100) if len(close) > period else None
+        for period in (1, 5, 20, 60, 252)
+    }
+    moving_averages = {
+        str(window): float(close.rolling(window, min_periods=window).mean().iloc[-1]) if len(close) >= window else None
+        for window in (20, 50, 200)
+    }
+    price_vs_moving_average = {
+        window: _finite((reference_price / average - 1) * 100) if average else None
+        for window, average in moving_averages.items()
+    }
+    return_volatility = {
+        str(window): _finite(returns.tail(window).std() * 100) if len(returns) >= window else None
+        for window in (20, 60)
+    }
+    volume_mean_20 = float(data["volume"].astype(float).tail(20).mean()) if len(data) >= 20 else None
+    volume_ratio_20 = float(data["volume"].iloc[-1] / volume_mean_20) if volume_mean_20 and volume_mean_20 > 0 else None
+    recent_low, recent_high = float(low.tail(20).min()), float(high.tail(20).max())
+    range_position_20 = _finite((reference_price - recent_low) / (recent_high - recent_low) * 100) if recent_high > recent_low else None
+    tail_20_returns = returns.tail(20)
+    tail_60_returns = returns.tail(60)
+    var_95 = float(sample.quantile(0.05)) if len(sample) else 0.0
+    cvar_95 = float(sample[sample <= var_95].mean()) if len(sample) else 0.0
 
     diagnostics = {
         "observation_count": int(len(data)),
@@ -72,6 +96,16 @@ def analyze_market(data: pd.DataFrame, horizon: int) -> tuple[dict, dict]:
         "lag1_return_autocorrelation": _finite(sample.autocorr(1)) if len(sample) > 2 else 0.0,
         "hurst_estimate": _hurst_exponent(sample),
         "trailing_20_bar_return_pct": trend_return * 100,
+        "trailing_returns_pct": trailing_returns,
+        "moving_averages": moving_averages,
+        "price_vs_moving_average_pct": price_vs_moving_average,
+        "realized_volatility_pct_per_bar": return_volatility,
+        "positive_return_frequency_pct": {
+            "20": _finite(tail_20_returns.gt(0).mean() * 100) if len(tail_20_returns) else None,
+            "60": _finite(tail_60_returns.gt(0).mean() * 100) if len(tail_60_returns) else None,
+        },
+        "volume_vs_20_bar_average": _finite(volume_ratio_20),
+        "price_position_in_20_bar_range_pct": range_position_20,
         "regime": f"{trend_regime}; {vol_regime}",
         "regime_method": "Trailing 20-bar return, 50-bar trend, and trailing volatility median; rule-based, no future bars.",
         "max_drawdown_last_252_bars_pct": _finite(drawdown.min() * 100) if len(drawdown) else 0.0,
@@ -81,6 +115,9 @@ def analyze_market(data: pd.DataFrame, horizon: int) -> tuple[dict, dict]:
         "sqrt_time_horizon_volatility_pct": horizon_vol * 100,
         "parkinson_volatility_pct_per_bar": math.sqrt(max(float(parkinson_var), 0.0)) * 100 if pd.notna(parkinson_var) else 0.0,
         "garman_klass_volatility_pct_per_bar": math.sqrt(max(float(garman_klass_var), 0.0)) * 100 if pd.notna(garman_klass_var) else 0.0,
+        "historical_var_95_pct_per_bar": var_95 * 100,
+        "historical_cvar_95_pct_per_bar": cvar_95 * 100,
+        "downside_deviation_pct_per_bar": _finite(np.sqrt(np.mean(np.minimum(sample.to_numpy(dtype=float), 0) ** 2)) * 100) if len(sample) else 0.0,
         "sqrt_time_range_lower": max(0.0, reference_price * (1 - 1.96 * horizon_vol)),
         "sqrt_time_range_upper": reference_price * (1 + 1.96 * horizon_vol),
         "range_assumption": "EWMA volatility scaled by square-root-of-time; descriptive risk range, not a calibrated prediction interval.",
