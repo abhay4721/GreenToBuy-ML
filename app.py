@@ -111,6 +111,27 @@ if st.session_state.get("analysis_error"):
     st.error(f"Analysis failed: {st.session_state['analysis_error']}")
 
 result = st.session_state.get("analysis_result")
+if result is not None:
+    required_diagnostics = {
+        "trailing_returns_pct",
+        "price_vs_moving_average_pct",
+        "volume_vs_20_bar_average",
+        "price_position_in_20_bar_range_pct",
+        "positive_return_frequency_pct",
+        "realized_volatility_pct_per_bar",
+    }
+    required_risk = {
+        "historical_var_95_pct_per_bar",
+        "historical_cvar_95_pct_per_bar",
+        "downside_deviation_pct_per_bar",
+    }
+    diagnostics = result.get("diagnostics", {})
+    risk = result.get("risk", {})
+    if not required_diagnostics.issubset(diagnostics) or not required_risk.issubset(risk):
+        st.session_state.pop("analysis_result", None)
+        st.info("This analysis was created by an older app version. Run the analysis again to load the expanded statistics.")
+        st.stop()
+
 if result is None:
     st.info("Choose a market in the sidebar, then run an analysis to load its forecast and research statistics.")
     intro = st.columns(3)
