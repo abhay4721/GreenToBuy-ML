@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 from forecasting import build_features, forecast
+from external_data import indian_macro_features
 from market_data import INTERVALS, get_stock_data, market_profile, normalize_symbol
 from paper_trading import order_history, place_paper_order, positions
 from realtime import RealtimeUnavailable, TwelveDataStream
@@ -135,7 +136,8 @@ def get_stock_analysis(
             raise HTTPException(status_code=422, detail="Choose auto, weighted ensemble, ridge, random forest, extra trees, hist gradient boosting, or svr.")
         data = get_stock_data(ticker, interval)
         profile = market_profile(ticker)
-        result = forecast(data, horizon=horizon, model_choice=model, market_profile=profile)
+        external_features, external_status = indian_macro_features(data.index) if profile == "india" else (None, {"available": False, "reason": "No additional macro feed is configured for this market."})
+        result = forecast(data, horizon=horizon, model_choice=model, market_profile=profile, external_features=external_features)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -144,7 +146,7 @@ def get_stock_analysis(
         logger.exception("Analysis failed for %s", symbol)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    features = build_features(data)
+    features = build_features(data, external_features)
     latest_features = features.iloc[-1]
     indicator_names = ("sma_20", "sma_50", "sma_200", "rsi", "macd", "atr", "adx", "bb_upper", "bb_lower")
     indicators = {name: (float(latest_features[name]) if pd.notna(latest_features[name]) else None) for name in indicator_names}
@@ -159,6 +161,7 @@ def get_stock_analysis(
         "forecast": result.to_dict(),
         "diagnostics": result.diagnostics,
         "risk": result.risk,
+        "external_data": external_status,
         "indicators": indicators,
         "chart_data": [
             {"x": timestamp.isoformat(), "o": float(row.open), "h": float(row.high), "l": float(row.low), "c": float(row.close), "v": float(row.volume) if pd.notna(row.volume) else None}
@@ -173,6 +176,7 @@ def get_stock_analysis(
             response,
             list(features.columns),
             str(features.dropna().index[0].isoformat()),
+            external_data=external_status,
         )
     except Exception:
         logger.exception("Could not persist research run for %s", ticker)

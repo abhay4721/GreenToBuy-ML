@@ -168,6 +168,13 @@ if analyze:
         st.caption("Forex auto mode stacks the supported model families and uses the blend only when it clears the baseline hurdle.")
     elif result["market_profile"] == "india":
         st.caption("India auto mode includes its regularized trend-boosting candidate in the validation-fitted stack.")
+        external_data = result["external_data"]
+        if external_data["available"]:
+            change = external_data["usd_inr_return_5obs_pct"]
+            change_text = f" · 5-observation move: {change:+.2f}%" if change is not None else ""
+            st.caption(f"Point-in-time macro feature: USD/INR {external_data['usd_inr_rate']:.4f} (reference {external_data['reference_date']}, available from {external_data['available_from']}; lagged one day){change_text} · Frankfurter")
+        else:
+            st.caption(f"USD/INR macro feature unavailable; this run used market-price features only. {external_data['reason']}")
 
     chart = pd.DataFrame(result["chart_data"])
     chart["x"] = pd.to_datetime(chart["x"], utc=True)

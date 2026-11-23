@@ -47,7 +47,7 @@ class ForecastResult:
         return asdict(self)
 
 
-def build_features(data: pd.DataFrame) -> pd.DataFrame:
+def build_features(data: pd.DataFrame, external_features: pd.DataFrame | None = None) -> pd.DataFrame:
     """Build features from current and prior bars only; never use future values."""
     close = data["close"].astype(float)
     high, low = data["high"].astype(float), data["low"].astype(float)
@@ -100,6 +100,10 @@ def build_features(data: pd.DataFrame) -> pd.DataFrame:
     for window in (5, 10, 20):
         f[f"rolling_mean_return_{window}"] = f["daily_return"].rolling(window).mean()
         f[f"rolling_std_return_{window}"] = f["daily_return"].rolling(window).std()
+    if external_features is not None:
+        aligned_external = external_features.reindex(data.index)
+        for name in aligned_external.columns:
+            f[name] = pd.to_numeric(aligned_external[name], errors="coerce")
     return f.replace([np.inf, -np.inf], np.nan)
 
 
@@ -196,7 +200,13 @@ def _stack_weights(predictions: np.ndarray, actual: np.ndarray) -> np.ndarray:
     return weights
 
 
-def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", market_profile: str = "global_equity") -> ForecastResult:
+def forecast(
+    data: pd.DataFrame,
+    horizon: int = 1,
+    model_choice: str = "auto",
+    market_profile: str = "global_equity",
+    external_features: pd.DataFrame | None = None,
+) -> ForecastResult:
     if horizon not in (1, 3, 5, 10, 20, 30):
         raise ValueError("Horizon must be 1, 3, 5, 10, 20, or 30 trading bars.")
     choices = ("auto", "ridge", "random forest", "extra trees", "hist gradient boosting", "svr", "weighted ensemble")
@@ -206,7 +216,7 @@ def forecast(data: pd.DataFrame, horizon: int = 1, model_choice: str = "auto", m
         raise ValueError("At least 250 valid price rows are required to calculate the 200-bar trend features and evaluate a forecast.")
 
     diagnostics, risk = analyze_market(data, horizon)
-    features = build_features(data)
+    features = build_features(data, external_features)
     future_price = data["close"].shift(-horizon).rename("future_price")
     target_return = (future_price / data["close"] - 1).rename("target_return")
     dataset = features.join([target_return, future_price]).replace([np.inf, -np.inf], np.nan).dropna()

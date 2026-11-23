@@ -29,6 +29,7 @@ def record_experiment(
     feature_names: list[str],
     training_start: str,
     db_path: str | Path = DEFAULT_DB_PATH,
+    external_data: dict[str, Any] | None = None,
 ) -> str:
     """Persist a completed run after evaluation; return its stable run id."""
     experiment_id = str(uuid.uuid4())
@@ -39,6 +40,7 @@ def record_experiment(
         "features": feature_names,
         "ensemble_weights": forecast["ensemble_weights"],
         "training_start": training_start,
+        "external_data": external_data or {"available": False},
         "validation_end": forecast["validation_end"],
         "validation_points": forecast["validation_points"],
         "random_seed": 17,

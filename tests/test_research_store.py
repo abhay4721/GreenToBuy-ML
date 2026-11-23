@@ -30,12 +30,13 @@ class ResearchStoreTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "runs.db"
-            run_id = record_experiment("RELIANCE.NS", "daily", "auto", result, ["close", "rsi"], "2024-01-01", database)
+            run_id = record_experiment("RELIANCE.NS", "daily", "auto", result, ["close", "rsi"], "2024-01-01", database, external_data={"available": True, "provider": "Frankfurter"})
             runs = recent_experiments("RELIANCE.NS", db_path=database)
             self.assertEqual(len(runs), 1)
             self.assertEqual(runs[0]["experiment_id"], run_id)
             self.assertEqual(runs[0]["config"]["random_seed"], 17)
             self.assertEqual(runs[0]["config"]["features"], ["close", "rsi"])
+            self.assertEqual(runs[0]["config"]["external_data"]["provider"], "Frankfurter")
             self.assertEqual(runs[0]["metrics"]["holdout_predictions"][0]["actual"], 101.0)
             self.assertEqual(recent_experiments("AAPL", db_path=database), [])
 
