@@ -153,18 +153,18 @@ expected = forecast["return_forecast_pct"]
 
 head_cols = st.columns([3, 1])
 head_cols[0].markdown(f"### {symbol} <span class='gtb-muted'>· {result['market_profile'].replace('_', ' ').title()} · {interval}</span>", unsafe_allow_html=True)
-head_cols[0].caption(f"Latest bar {result['latest_price']['timestamp']} · Source {result['data_source']} · Updated {result['updated_at']} · Run {str(result.get('experiment_id') or 'unsaved')[:8]}")
+head_cols[0].caption(f"Latest bar {result['latest_price']['timestamp']} · {result['data_source']}")
 head_cols[1].markdown(f"<div style='text-align:right;padding-top:16px'><span class='gtb-pill'>{diagnostics['regime']}</span></div>", unsafe_allow_html=True)
 
 baseline_mae = forecast["naive_metrics"]["mae"]
 selected_mae = forecast["metrics"]["mae"]
 holdout_skill = ((baseline_mae - selected_mae) / baseline_mae * 100) if baseline_mae > 0 else 0.0
-summary = st.columns(5)
-summary[0].metric("Latest price", f"{current:,.3f}")
-summary[1].metric(f"{horizon}-{unit} estimate", f"{forecast['forecast']:,.3f}", f"{expected:+.2f}%")
-summary[2].metric("Selected method", forecast["model"])
-summary[3].metric("Holdout MAE", f"{selected_mae:,.3f}", f"{holdout_skill:+.1f}% vs baseline")
-summary[4].metric("Positive-return estimate", f"{forecast['probability_positive']:.1f}%", help="Empirical frequency from selection-fold return residuals; it is not a calibrated probability.")
+band = forecast["uncertainty"]["intervals"]["90"]
+summary = st.columns(3)
+summary[0].metric("Latest price", f"{current:,.2f}")
+summary[1].metric(f"{horizon}-{unit} forecast", f"{forecast['forecast']:,.2f}", f"{expected:+.2f}%")
+summary[2].metric("Empirical 90% range", f"{band['lower']:,.2f} – {band['upper']:,.2f}", help="Range based on past selection-fold errors; future prices can fall outside it.")
+st.caption(f"Model: {forecast['model']} · Holdout MAE {selected_mae:,.3f} · Forecasts are uncertain and cannot be 100% predictable.")
 
 if forecast["model"] == "Naïve: unchanged close":
     st.warning("No candidate cleared the validation hurdle. The forecast is the unchanged-close benchmark.")
@@ -186,7 +186,9 @@ with overview_tab:
     chart["x"] = pd.to_datetime(chart["x"], utc=True)
     chart["sma20"] = chart["c"].rolling(20).mean()
     chart["sma50"] = chart["c"].rolling(50).mean()
-    show_sma = st.toggle("Show 20/50-bar trend lines", value=True)
+    chart_head, chart_control = st.columns([4, 1])
+    chart_head.subheader("Price history and forecast")
+    show_sma = chart_control.toggle("Trend lines", value=True)
     figure = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.035, row_heights=[0.78, 0.22])
     figure.add_trace(go.Candlestick(x=chart.x, open=chart.o, high=chart.h, low=chart.l, close=chart.c, name=symbol), row=1, col=1)
     if show_sma:
@@ -195,7 +197,6 @@ with overview_tab:
     figure.add_trace(go.Bar(x=chart.x, y=chart.v, name="Volume", marker_color="#42627b", opacity=0.7), row=2, col=1)
     last_time = chart.x.iloc[-1]
     future_time = (pd.bdate_range(start=last_time.tz_localize(None), periods=horizon + 1)[-1].tz_localize("UTC") if interval == "daily" else last_time + pd.Timedelta(minutes={"5min": 5, "15min": 15, "60min": 60}[interval] * horizon))
-    band = forecast["uncertainty"]["intervals"]["90"]
     figure.add_trace(go.Scatter(x=[last_time, future_time], y=[current, forecast["forecast"]], mode="lines+markers", name="Forecast", line={"color": "#45d99d", "dash": "dash", "width": 2.5}), row=1, col=1)
     figure.add_trace(go.Scatter(x=[future_time, future_time], y=[band["lower"], band["upper"]], mode="lines+markers", name="Empirical 90% band", line={"color": "#edbd68", "width": 5}), row=1, col=1)
     figure.update_layout(template="plotly_dark", height=590, margin={"l": 8, "r": 8, "t": 16, "b": 8}, xaxis_rangeslider_visible=False, legend={"orientation": "h", "y": 1.04}, hovermode="x unified")
@@ -203,20 +204,20 @@ with overview_tab:
     figure.update_yaxes(title_text="Volume", row=2, col=1)
     st.plotly_chart(figure, use_container_width=True)
 
-    st.subheader("Market snapshot")
-    returns = diagnostics["trailing_returns_pct"]
-    snapshot = st.columns(5)
-    for column, period in zip(snapshot, ("1", "5", "20", "60", "252")):
-        value = returns.get(period)
-        column.metric(f"Return · {period} bars", f"{value:+.2f}%" if value is not None else "N/A")
-    more = st.columns(6)
-    more[0].metric("Price vs SMA 20", f"{diagnostics['price_vs_moving_average_pct']['20']:+.2f}%" if diagnostics["price_vs_moving_average_pct"]["20"] is not None else "N/A")
-    more[1].metric("Price vs SMA 50", f"{diagnostics['price_vs_moving_average_pct']['50']:+.2f}%" if diagnostics["price_vs_moving_average_pct"]["50"] is not None else "N/A")
-    more[2].metric("Volume vs 20-bar avg", f"{diagnostics['volume_vs_20_bar_average']:.2f}×" if diagnostics["volume_vs_20_bar_average"] is not None else "N/A")
-    more[3].metric("Position in 20-bar range", f"{diagnostics['price_position_in_20_bar_range_pct']:.0f}%" if diagnostics["price_position_in_20_bar_range_pct"] is not None else "N/A")
-    more[4].metric("Positive bars · 20", f"{diagnostics['positive_return_frequency_pct']['20']:.0f}%" if diagnostics["positive_return_frequency_pct"]["20"] is not None else "N/A")
-    more[5].metric("Positive bars · 60", f"{diagnostics['positive_return_frequency_pct']['60']:.0f}%" if diagnostics["positive_return_frequency_pct"]["60"] is not None else "N/A")
-    st.caption("Returns and indicator distances are historical bar statistics. The 90% band is empirical and its observed holdout coverage is reported in Risk & indicators.")
+    with st.expander("Historical statistics", expanded=False):
+        st.caption("These summarize past bars and do not guarantee future performance.")
+        returns = diagnostics["trailing_returns_pct"]
+        snapshot = st.columns(5)
+        for column, period in zip(snapshot, ("1", "5", "20", "60", "252")):
+            value = returns.get(period)
+            column.metric(f"Return · {period} bars", f"{value:+.2f}%" if value is not None else "N/A")
+        more = st.columns(3)
+        more[0].metric("Price vs SMA 20 / 50", f"{diagnostics['price_vs_moving_average_pct']['20']:+.2f}% / {diagnostics['price_vs_moving_average_pct']['50']:+.2f}%" if diagnostics["price_vs_moving_average_pct"]["20"] is not None and diagnostics["price_vs_moving_average_pct"]["50"] is not None else "N/A")
+        more[1].metric("Volume vs 20-bar average", f"{diagnostics['volume_vs_20_bar_average']:.2f}×" if diagnostics["volume_vs_20_bar_average"] is not None else "N/A")
+        more[2].metric("Position in 20-bar range", f"{diagnostics['price_position_in_20_bar_range_pct']:.0f}%" if diagnostics["price_position_in_20_bar_range_pct"] is not None else "N/A")
+        more = st.columns(2)
+        more[0].metric("Positive bars · 20", f"{diagnostics['positive_return_frequency_pct']['20']:.0f}%" if diagnostics["positive_return_frequency_pct"]["20"] is not None else "N/A")
+        more[1].metric("Positive bars · 60", f"{diagnostics['positive_return_frequency_pct']['60']:.0f}%" if diagnostics["positive_return_frequency_pct"]["60"] is not None else "N/A")
 
 with model_tab:
     st.subheader("Holdout scorecard")
